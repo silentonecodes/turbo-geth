@@ -185,6 +185,40 @@ func (tr *Resolver) ResolveStatefulCached(db ethdb.Database, blockNr uint64) err
 	return resolver.AttachRequestedCode(db, tr.codeRequests)
 }
 
+type A struct{}
+
+func (*A) HashOnly(prefix []byte) bool {
+	return false
+}
+func (*A) AddHex(hex []byte) {
+}
+func (*A) IsCodeTouched(common.Hash) bool {
+	return false
+}
+
+func (*A) Current() []byte {
+	return nil
+}
+
+func (tr *Resolver) ResolveWitnessStatefulCached(db ethdb.Database, blockNr uint64) error {
+	tr.collectWitnesses = true
+
+	var hf hookFunction
+	hf = tr.extractWitness
+
+	sort.Stable(tr)
+
+	resolver := NewResolverStatefulCached(tr.topLevels, tr.requests, hf)
+	resolver.newResolveSetFunc = func(minLength int) resolveSet {
+		return &A{}
+	}
+	if err := resolver.RebuildTrie(db, blockNr, tr.accounts, tr.historical); err != nil {
+		return err
+	}
+
+	return resolver.AttachRequestedCode(db, tr.codeRequests)
+}
+
 // ResolveStateless resolves and hooks subtries using a witnesses database instead of
 // the state DB.
 func (tr *Resolver) ResolveStateless(db WitnessStorage, blockNr uint64, trieLimit uint32, startPos int64) (int64, error) {
@@ -237,6 +271,21 @@ func (tr *Resolver) extractWitnessAndHookSubtrie(currentReq *ResolveRequest, hbR
 	tr.witnesses = append(tr.witnesses, witness)
 
 	return hookSubtrie(currentReq, hbRoot, hbHash)
+}
+
+func (tr *Resolver) extractWitness(currentReq *ResolveRequest, hbRoot node, hbHash common.Hash) error {
+	if tr.witnesses == nil {
+		tr.witnesses = make([]*Witness, 0)
+	}
+
+	witness, err := extractWitnessFromRootNode(hbRoot, tr.blockNr, false /*tr.hb.trace*/, &A{})
+	if err != nil {
+		return fmt.Errorf("error while extracting witness for resolver: %w", err)
+	}
+
+	tr.witnesses = append(tr.witnesses, witness)
+
+	return nil
 }
 
 func (t *Trie) rebuildHashes(db ethdb.Database, key []byte, pos int, blockNr uint64, accounts bool, expected hashNode) error {

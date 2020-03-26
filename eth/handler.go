@@ -1355,21 +1355,25 @@ func (pm *ProtocolManager) handleMgrMsg(p *mgrPeer) error {
 		subtree := epoch % 256
 		for i := 0; i < 256; i++ { // spread witness of each subtree
 			prefix := []byte{byte(subtree), byte(i)}
-			witness, err := tds.ExtractWitnessForPrefix(prefix, false, false)
-			if err != nil {
-				return err
-			}
-			buf.Reset()
-			if _, err := witness.WriteTo(buf); err != nil {
-				return err
-			}
-			//fmt.Printf("Sernding MGRWitness: %x, of %d\n", prefix, buf.Len())
-			//for _, o := range witness.Operators {
-			//fmt.Printf("%x\n", o)
-			//}
+			resolver := trie.NewResolver(0, true, blockNr)
+			resolver.CollectWitnesses(true)
+			resolver.SetHistorical(false)
 
-			if err := p.rw.WriteMsg(p2p.Msg{Code: MGRWitness, Size: 0, Payload: buf}); err != nil {
+			if need, req := tds.Trie().NeedResolution(nil, prefix); need {
+				resolver.AddRequest(req)
+			}
+			if err := resolver.ResolveWitnessStatefulCached(tds.Database(), blockNr); err != nil {
 				return err
+			}
+			witnesses := resolver.PopCollectedWitnesses()
+			for _, w := range witnesses {
+				buf.Reset()
+				if _, err := w.WriteTo(buf); err != nil {
+					return err
+				}
+				if err := p.rw.WriteMsg(p2p.Msg{Code: MGRWitness, Size: 0, Payload: buf}); err != nil {
+					return err
+				}
 			}
 		}
 	case MGRWitness:

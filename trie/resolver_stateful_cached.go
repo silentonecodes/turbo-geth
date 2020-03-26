@@ -77,7 +77,7 @@ func (tr *ResolverStatefulCached) PrepareResolveParams() ([][]byte, []uint) {
 			} else {
 				minLength = tr.topLevels - req.resolvePos
 			}
-			rs := NewResolveSet(minLength)
+			rs := tr.newResolveSetFunc(minLength)
 			tr.rss = append(tr.rss, rs)
 			rs.AddHex(req.resolveHex[req.resolvePos:])
 		} else {

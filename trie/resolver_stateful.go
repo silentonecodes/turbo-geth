@@ -15,8 +15,13 @@ import (
 
 type hookFunction func(*ResolveRequest, node, common.Hash) error
 
+type resolveSet interface {
+	HashOnly(prefix []byte) bool
+	AddHex(hex []byte)
+}
+
 type ResolverStateful struct {
-	rss        []*ResolveSet
+	rss        []resolveSet
 	curr       bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
 	succ       bytes.Buffer
 	value      bytes.Buffer // Current value to be used as the value tape for the hash builder
@@ -25,7 +30,7 @@ type ResolverStateful struct {
 	hb         *HashBuilder
 	topLevels  int             // How many top levels of the trie to keep (not roll into hashes)
 	currentReq *ResolveRequest // Request currently being handled
-	currentRs  *ResolveSet     // ResolveSet currently being used
+	currentRs  resolveSet      // ResolveSet currently being used
 	keyIdx     int
 	fieldSet   uint32 // fieldSet for the next invocation of genStructStep
 	a          accounts.Account
@@ -33,8 +38,9 @@ type ResolverStateful struct {
 	accData    GenStructStepAccountData
 	requests   []*ResolveRequest
 
-	roots        []node // roots of the tries that are being built
-	hookFunction hookFunction
+	roots             []node // roots of the tries that are being built
+	hookFunction      hookFunction
+	newResolveSetFunc func(minLength int) resolveSet
 }
 
 func NewResolverStateful(topLevels int, requests []*ResolveRequest, hookFunction hookFunction) *ResolverStateful {
@@ -44,6 +50,9 @@ func NewResolverStateful(topLevels int, requests []*ResolveRequest, hookFunction
 		reqIndices:   []int{},
 		requests:     requests,
 		hookFunction: hookFunction,
+		newResolveSetFunc: func(minLength int) resolveSet {
+			return NewResolveSet(minLength)
+		},
 	}
 }
 
@@ -103,7 +112,7 @@ func (tr *ResolverStateful) PrepareResolveParams() ([][]byte, []uint) {
 			} else {
 				minLength = tr.topLevels - req.resolvePos
 			}
-			rs := NewResolveSet(minLength)
+			rs := tr.newResolveSetFunc(minLength)
 			tr.rss = append(tr.rss, rs)
 			rs.AddHex(req.resolveHex[req.resolvePos:])
 		} else {
