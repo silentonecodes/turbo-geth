@@ -14,6 +14,7 @@ import (
 )
 
 var pic = flag.String("pic", "", "specifies picture to regenerate")
+var file = flag.String("file", "", "file where the trie is serialised")
 
 // Generate set of keys for the visualisation
 func generatePrefixGroups() []string {
@@ -392,6 +393,41 @@ func prefixGroups8() {
 	}
 }
 
+func visualisetrie(filename string) {
+	fmt.Printf("Visualising %s\n", filename)
+	fin, err := os.Open(filename)
+	if err != nil {
+		panic(err)
+	}
+	defer fin.Close()
+	t, err := trie.Load(fin)
+	if err != nil {
+		panic(err)
+	}
+	outputname := filename + ".dot"
+	fout, err1 := os.Create(outputname)
+	if err1 != nil {
+		panic(err1)
+	}
+	var hightlights = make([][]byte, 0)
+	visual.StartGraph(fout, false)
+	trie.Visual(t, fout, &trie.VisualOpts{
+		Highlights:  hightlights,
+		IndexColors: visual.HexIndexColors,
+		FontColors:  visual.HexFontColors,
+		Values:      true,
+		SameLevel:   true,
+	})
+	visual.EndGraph(fout)
+	if err = fout.Close(); err != nil {
+		panic(err)
+	}
+	cmd := exec.Command("dot", "-Tpng:gd", "-O", outputname)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Printf("error: %v, output: %s\n", err, output)
+	}
+}
+
 func main() {
 	flag.Parse()
 	switch *pic {
@@ -415,5 +451,7 @@ func main() {
 		if err := initialState1(); err != nil {
 			fmt.Printf("%v\n", err)
 		}
+	case "trie":
+		visualisetrie(*file)
 	}
 }
