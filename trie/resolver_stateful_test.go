@@ -332,10 +332,10 @@ func TestApiDetails(t *testing.T) {
 					// Will check later if value which we .Get() from Trie has expected ID.
 					Nonce:          uint64(i*10 + j),
 					Initialised:    true,
-					Root:           EmptyRoot,
 					CodeHash:       EmptyCodeHash,
 					Balance:        *big.NewInt(0),
 					StorageSize:    uint64(len(storageV)),
+					Incarnation:    incarnation,
 					HasStorageSize: len(storageV) > 0,
 				}
 				require.NoError(writeAccount(db, common.BytesToHash(common.Hex2Bytes(k)), a))
@@ -359,7 +359,7 @@ func TestApiDetails(t *testing.T) {
 		resolver.AddRequest(tr.NewResolveRequest(nil, common.Hex2Bytes("000202"), 0, expectRootHash.Bytes()))
 		resolver.AddRequest(tr.NewResolveRequest(nil, common.Hex2Bytes("0f"), 0, expectRootHash.Bytes()))
 
-		err := resolver.ResolveStateful(db, 0, false)
+		err := resolver.ResolveStateful(db, 0, true)
 		//fmt.Printf("%x\n", tr.root.(*fullNode).Children[0].(*fullNode).Children[0].reference())
 		//fmt.Printf("%x\n", tr.root.(*fullNode).Children[15].(*fullNode).Children[15].reference())
 		assert.NoError(err)
@@ -496,8 +496,8 @@ func writeAccount(db ethdb.Putter, addrHash common.Hash, acc accounts.Account) e
 	if err := db.Put(dbutils.CurrentStateBucket, addrHashBytes, value); err != nil {
 		return err
 	}
-	if err := db.Put(dbutils.IntermediateTrieHashBucket, dbutils.GenerateStoragePrefix(addrHash, acc.Incarnation), acc.Root.Bytes()); err != nil {
-		return err
-	}
+	//if err := db.Put(dbutils.IntermediateTrieHashBucket, dbutils.GenerateStoragePrefix(addrHash, acc.Incarnation), acc.Root.Bytes()); err != nil {
+	//	return err
+	//}
 	return nil
 }
