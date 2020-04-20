@@ -45,9 +45,10 @@ type ResolverStateful struct {
 	roots        []node // roots of the tries that are being built
 	hookFunction hookFunction
 
-	isIH     bool
-	hashData GenStructStepHashData
-	trace    bool
+	isIH      bool
+	isAccount bool
+	hashData  GenStructStepHashData
+	trace     bool
 }
 
 func NewResolverStateful(topLevels int, requests []*ResolveRequest, hookFunction hookFunction) *ResolverStateful {
@@ -151,7 +152,7 @@ func (tr *ResolverStateful) finaliseRoot() error {
 			tr.accData.Incarnation = tr.a.Incarnation
 			data = &tr.accData
 			if !tr.a.IsEmptyCodeHash() || !tr.a.IsEmptyRoot() {
-				// the first item ends up deepest on the stack, the second item - on the top
+				// the first item ends up deepest on the stack, the seccond item - on the top
 				err = tr.hb.hash(tr.a.CodeHash[:])
 				if err != nil {
 					return err
@@ -214,13 +215,13 @@ func (tr *ResolverStateful) RebuildTrie(
 		if historical {
 			panic("historical data is not implemented")
 		} else {
-			err = tr.MultiWalk2(boltDB, startkeys, fixedbits, tr.WalkerAccounts, true)
+			err = tr.MultiWalk2(boltDB, startkeys, fixedbits, tr.Walker)
 		}
 	} else {
 		if historical {
 			panic("historical data is not implemented")
 		} else {
-			err = tr.MultiWalk2(boltDB, startkeys, fixedbits, tr.WalkerStorage, false)
+			err = tr.MultiWalk2(boltDB, startkeys, fixedbits, tr.Walker)
 		}
 	}
 	if err != nil {
@@ -313,7 +314,7 @@ func (tr *ResolverStateful) Walker(isAccount bool, isIH bool, keyIdx int, k []by
 			if tr.isIH {
 				tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
 				data = &tr.hashData
-			} else if tr.fieldSet == 0 {
+			} else if !tr.isAccount {
 				tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
 				data = &tr.leafData
 			} else {
@@ -324,7 +325,7 @@ func (tr *ResolverStateful) Walker(isAccount bool, isIH bool, keyIdx int, k []by
 				tr.accData.Incarnation = tr.a.Incarnation
 				data = &tr.accData
 				if !tr.a.IsEmptyCodeHash() || !tr.a.IsEmptyRoot() {
-					// the first item ends up deepest on the stack, the second item - on the top
+					// the first item ends up deepest on the stack, the seccond item - on the top
 					err = tr.hb.hash(tr.a.CodeHash[:])
 					if err != nil {
 						return err
@@ -342,6 +343,7 @@ func (tr *ResolverStateful) Walker(isAccount bool, isIH bool, keyIdx int, k []by
 		}
 		// Remember the current key and value
 		tr.isIH = isIH
+		tr.isAccount = isAccount
 		if isIH {
 			tr.value.Reset()
 			tr.value.Write(v)
@@ -357,6 +359,7 @@ func (tr *ResolverStateful) Walker(isAccount bool, isIH bool, keyIdx int, k []by
 
 		if err := tr.a.DecodeForStorage(v); err != nil {
 			return fmt.Errorf("fail DecodeForStorage: %w", err)
+
 		}
 		storageHash, err := accRoot(k, tr.a)
 		if err != nil {
@@ -390,6 +393,8 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 	rangeIdx := 0 // What is the current range we are extracting
 	fixedbytes, mask := ethdb.Bytesmask(fixedbits[rangeIdx])
 	startkey := startkeys[rangeIdx]
+	var isAccount bool
+
 	err := db.View(func(tx *bolt.Tx) error {
 		ihBucket := tx.Bucket(dbutils.IntermediateTrieHashBucket)
 		var ih *bolt.Cursor
@@ -420,17 +425,12 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 		var minKey []byte
 		var isIH bool
 		for k != nil || ihK != nil {
+			isAccount = len(k) == common.HashLength
+
 			// for Address bucket, skip ih keys longer than 31 bytes
 			if isAccount {
 				for len(ihK) > 31 {
 					ihK, ihV = ih.Next()
-				}
-				for len(k) > 32 {
-					k, v = c.Next()
-				}
-			} else {
-				for len(k) == 32 {
-					k, v = c.Next()
 				}
 			}
 			if ihK == nil && k == nil {
@@ -478,17 +478,12 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 							fmt.Printf("[isIH = %t], ih.SeekTo(%x) = %x\n", isIH, startkey, ihK)
 							fmt.Printf("[request = %s]\n", tr.requests[tr.reqIndices[rangeIdx]])
 						}
+						isAccount = len(k) == common.HashLength
+
 						// for Address bucket, skip ih keys longer than 31 bytes
 						if isAccount {
 							for len(ihK) > 31 {
 								ihK, ihV = ih.Next()
-							}
-							for len(k) > 32 {
-								k, v = c.Next()
-							}
-						} else {
-							for len(k) == 32 {
-								k, v = c.Next()
 							}
 						}
 						if k == nil && ihK == nil {
