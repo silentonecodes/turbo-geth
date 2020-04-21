@@ -207,6 +207,8 @@ func (hb *HashBuilder) accountLeaf(length int, keyHex []byte, storageSize uint64
 			root = hb.nodeStack[len(hb.nodeStack)-popped-1]
 			if root == nil {
 				root = hashNode(common.CopyBytes(hb.acc.Root[:]))
+			} else {
+				_ = root
 			}
 		}
 		popped++

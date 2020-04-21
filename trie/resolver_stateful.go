@@ -225,7 +225,7 @@ func (tr *ResolverStateful) RebuildTrie(
 	historical bool,
 	trace bool) error {
 	defer trieResolveStatefulTimer.UpdateSince(time.Now())
-	//trace = true
+	trace = true
 	tr.trace = trace
 	if !isAccount {
 		panic("Disable storage resolvers for now")
@@ -535,7 +535,7 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 					startKeyIndexIsBigger := startKeyIndex > minKeyIndex
 					cmp = bytes.Compare(minKey[:minKeyIndex], startkey[:startKeyIndex])
 					if tr.trace {
-						fmt.Printf("cmp3 %x %x [%x] (%d), %d %d\n", minKey[:minKeyIndex], startkey[:startKeyIndex], startkey, cmp, startKeyIndex, len(startkey))
+						//fmt.Printf("cmp3 %x %x [%x] (%d), %d %d\n", minKey[:minKeyIndex], startkey[:startKeyIndex], startkey, cmp, startKeyIndex, len(startkey))
 					}
 
 					if cmp == 0 && minKeyIndex == len(minKey) { // minKey has no more bytes to compare, then it's less than startKey
@@ -544,7 +544,7 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 						}
 					} else if cmp == 0 {
 						if tr.trace {
-							fmt.Printf("cmp5: [%x] %x %x %b, %d %d\n", minKey, minKey[minKeyIndex], startkey[startKeyIndex], mask, minKeyIndex, startKeyIndex)
+							//fmt.Printf("cmp5: [%x] %x %x %b, %d %d\n", minKey, minKey[minKeyIndex], startkey[startKeyIndex], mask, minKeyIndex, startKeyIndex)
 						}
 						k1 := minKey[minKeyIndex] & mask
 						k2 := startkey[startKeyIndex] & mask
