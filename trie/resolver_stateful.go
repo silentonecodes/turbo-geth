@@ -44,10 +44,11 @@ type ResolverStateful struct {
 	roots        []node // roots of the tries that are being built
 	hookFunction hookFunction
 
-	isIH      bool
-	isAccount bool
-	hashData  GenStructStepHashData
-	trace     bool
+	wasIH       bool
+	wasAccount  bool
+	hashData    GenStructStepHashData
+	trace       bool
+	accAddrHash []byte
 }
 
 func NewResolverStateful(topLevels int, requests []*ResolveRequest, hookFunction hookFunction) *ResolverStateful {
@@ -77,7 +78,7 @@ func (tr *ResolverStateful) Reset(topLevels int, requests []*ResolveRequest, hoo
 	tr.groups = tr.groups[:0]
 	tr.a.Reset()
 	tr.hb.Reset()
-	tr.isIH = false
+	tr.wasIH = false
 }
 
 func (tr *ResolverStateful) PopRoots() []node {
@@ -136,12 +137,49 @@ func (tr *ResolverStateful) finaliseRoot() error {
 	if tr.curr.Len() > 0 {
 		var err error
 		var data GenStructStepData
-		if tr.isIH {
+		if tr.wasIH {
 			tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
 			data = &tr.hashData
-		} else if !tr.isAccount {
+		} else if !tr.wasAccount {
 			tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
 			data = &tr.leafData
+			tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+			if err != nil {
+				return err
+			}
+
+			if !bytes.Equal(tr.a.Root.Bytes(), EmptyRoot.Bytes()) {
+				panic("why????")
+			}
+			tr.a.Root = EmptyRoot
+
+			tr.accData.StorageSize = tr.a.StorageSize
+			tr.accData.Balance.Set(&tr.a.Balance)
+			tr.accData.Nonce = tr.a.Nonce
+			tr.accData.Incarnation = tr.a.Incarnation
+			if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
+				tr.accData.FieldSet = AccountFieldSetNotContract
+			} else {
+				if tr.a.HasStorageSize {
+					tr.accData.FieldSet = AccountFieldSetContractWithSize
+				} else {
+					tr.accData.FieldSet = AccountFieldSetContract
+				}
+
+				//tr.a.Root.SetBytes(common.CopyBytes(tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength : len(tr.hb.hashStack)]))
+
+				// the first item ends up deepest on the stack, the seccond item - on the top
+				err = tr.hb.hash(tr.a.CodeHash[:])
+				if err != nil {
+					return err
+				}
+
+				err = tr.hb.hash(tr.a.Root[:])
+				if err != nil {
+					return err
+				}
+			}
+			data = &tr.accData
 		} else {
 			tr.accData.StorageSize = tr.a.StorageSize
 			tr.accData.Balance.Set(&tr.a.Balance)
@@ -187,12 +225,16 @@ func (tr *ResolverStateful) RebuildTrie(
 	historical bool,
 	trace bool) error {
 	defer trieResolveStatefulTimer.UpdateSince(time.Now())
+	//trace = true
 	tr.trace = trace
+	if !isAccount {
+		panic("Disable storage resolvers for now")
+	}
 
 	startkeys, fixedbits := tr.PrepareResolveParams()
 	if db == nil {
 		var b strings.Builder
-		fmt.Fprintf(&b, "ResolveWithDb(db=nil), isAccount: %t\n", isAccount)
+		fmt.Fprintf(&b, "ResolveWithDb(db=nil), wasAccount: %t\n", isAccount)
 		for i, sk := range startkeys {
 			fmt.Fprintf(&b, "sk %x, bits: %d\n", sk, fixedbits[i])
 		}
@@ -260,7 +302,13 @@ func (tr *ResolverStateful) AttachRequestedCode(db ethdb.Getter, requests []*Res
 // Walker - k, v - shouldn't be reused in the caller's code
 func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte, accRoot func(addrHash []byte, a accounts.Account) ([]byte, error)) error {
 	if tr.trace {
-		fmt.Printf("Walker: isAccount=%t, isIH=%t, keyIdx: %d key:%x  value:%x\n", isAccount, isIH, keyIdx, k, v)
+		fmt.Printf("Walker: isAcc=%t, isIH=%t, keyIdx: %d key:%x value:%x\n", isAccount, isIH, keyIdx, k, v)
+	}
+
+	// skip old incarnations
+	if !isIH && !isAccount && !bytes.HasPrefix(k, dbutils.GenerateStoragePrefix(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)) {
+		fmt.Printf("Skip incarnation: %x, %x\n", k, dbutils.GenerateStoragePrefix(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation))
+		return nil
 	}
 
 	if keyIdx != tr.keyIdx {
@@ -299,44 +347,51 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 		if tr.curr.Len() > 0 {
 			var err error
 			var data GenStructStepData
-			if !tr.isAccount && !isIH && isAccount {
-				fmt.Printf("1: %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)])
-				fmt.Printf("1: %x\n", tr.a.Root)
-				fmt.Printf("11: %x\n", tr.hb.hashStack)
-				if len(tr.hb.nodeStack) > 0 {
-					n := tr.hb.nodeStack[len(tr.hb.nodeStack)-1]
-					if n != nil {
-						fmt.Printf("1111: %x\n", n.reference())
-					}
-				}
-				if len(tr.hb.nodeStack) > 1 {
-					n := tr.hb.nodeStack[len(tr.hb.nodeStack)-2]
-					if n != nil {
-						fmt.Printf("1111: %x\n", n.reference())
-					}
-				}
-				if len(tr.hb.nodeStack) > 2 {
-					n := tr.hb.nodeStack[len(tr.hb.nodeStack)-3]
-					if n != nil {
-						fmt.Printf("1111: %x\n", n.reference())
-					}
-				}
+			doGenStructStep := !(!tr.wasIH && tr.wasAccount && !isAccount)
 
-				//if len(tr.hb.nodeStack) > 2 {
-				//	fmt.Printf("1111: %x\n", tr.hb.nodeStack[len(tr.hb.nodeStack)-2].reference())
-				//}
-				//if len(tr.hb.nodeStack) > 3 {
-				//	fmt.Printf("1111: %x\n", tr.hb.nodeStack[len(tr.hb.nodeStack)-3].reference())
-				//}
-			}
-
-			if tr.isIH {
+			if tr.wasIH {
 				tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
 				data = &tr.hashData
-			} else if !tr.isAccount {
-				tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
-				data = &tr.leafData
-			} else {
+			} else if isAccount {
+				if !tr.wasAccount {
+					tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
+					data = &tr.leafData
+					tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+					if err != nil {
+						return err
+					}
+
+					// print here hash and node stack
+					if !bytes.Equal(tr.a.Root.Bytes(), EmptyRoot.Bytes()) {
+						fmt.Printf("Wish: %x\n", tr.a.Root)
+						fmt.Printf("1: %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)])
+						fmt.Printf("11: %x\n", tr.hb.hashStack)
+						if len(tr.hb.nodeStack) > 0 {
+							n := tr.hb.nodeStack[len(tr.hb.nodeStack)-1]
+							if n != nil {
+								fmt.Printf("1111: %x\n", n.reference())
+							}
+						}
+						if len(tr.hb.nodeStack) > 1 {
+							n := tr.hb.nodeStack[len(tr.hb.nodeStack)-2]
+							if n != nil {
+								fmt.Printf("1111: %x\n", n.reference())
+							}
+						}
+						if len(tr.hb.nodeStack) > 2 {
+							n := tr.hb.nodeStack[len(tr.hb.nodeStack)-3]
+							if n != nil {
+								fmt.Printf("1111: %x\n", n.reference())
+							}
+						}
+					}
+				} else {
+					if !bytes.Equal(tr.a.Root.Bytes(), EmptyRoot.Bytes()) {
+						panic("why????")
+					}
+					tr.a.Root = EmptyRoot
+				}
+
 				tr.accData.StorageSize = tr.a.StorageSize
 				tr.accData.Balance.Set(&tr.a.Balance)
 				tr.accData.Nonce = tr.a.Nonce
@@ -350,7 +405,7 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 						tr.accData.FieldSet = AccountFieldSetContract
 					}
 
-					tr.a.Root.SetBytes(common.CopyBytes(tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength : len(tr.hb.hashStack)]))
+					//tr.a.Root.SetBytes(common.CopyBytes(tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength : len(tr.hb.hashStack)]))
 
 					// the first item ends up deepest on the stack, the seccond item - on the top
 					err = tr.hb.hash(tr.a.CodeHash[:])
@@ -363,20 +418,31 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 						return err
 					}
 				}
-				//fmt.Printf("Stack: %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)])
-				//fmt.Printf("Stack: %x, %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)], tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength-common.HashLength:len(tr.hb.hashStack)-common.HashLength])
-
 				data = &tr.accData
+			} else if !isAccount {
+				if tr.wasAccount {
+					fmt.Printf("State: !isAccount && tr.wasAccount \n")
+					//will call GenStructStep when acc.Root is ready (after all it's storage)
+				} else {
+					tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
+					data = &tr.leafData
+				}
 			}
-			tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
-			if err != nil {
-				return err
+
+			//fmt.Printf("Stack: %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)])
+			//fmt.Printf("Stack: %x, %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)], tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength-common.HashLength:len(tr.hb.hashStack)-common.HashLength])
+
+			if doGenStructStep {
+				tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
 		// Remember the current key and value
-		tr.isIH = isIH
-		tr.isAccount = isAccount
+		tr.wasIH = isIH
+		tr.wasAccount = isAccount
 
 		if isIH || !isAccount {
 			tr.value.Reset()
@@ -393,9 +459,8 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 			return err
 		}
 		tr.a.Root.SetBytes(storageHash)
-		if !bytes.Equal(tr.a.Root.Bytes(), EmptyRoot.Bytes()) {
-			fmt.Printf("2: %x\n", tr.a.Root)
-		}
+		tr.accAddrHash = tr.accAddrHash[:0]
+		tr.accAddrHash = append(tr.accAddrHash, k...)
 	}
 
 	return nil
@@ -448,7 +513,7 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 			isAccount = len(k) == common.HashLength
 
 			// for Address bucket, skip ih keys longer than 31 bytes
-			//if isAccount {
+			//if wasAccount {
 			//	for len(ihK) > 31 {
 			//		ihK, ihV = ih.Next()
 			//	}
@@ -457,7 +522,7 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 				break
 			}
 			if tr.trace {
-				fmt.Printf("For loop: %x, %x\n", ihK, k)
+				//fmt.Printf("For loop: %x, %x\n", ihK, k)
 			}
 
 			isIH, minKey = keyIsBefore(ihK, k)
@@ -495,13 +560,13 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 						ihK, ihV = ih.SeekTo(startkey)
 						if tr.trace {
 							fmt.Printf("c.SeekTo(%x) = %x\n", startkey, k)
-							fmt.Printf("[isIH = %t], ih.SeekTo(%x) = %x\n", isIH, startkey, ihK)
+							fmt.Printf("[wasIH = %t], ih.SeekTo(%x) = %x\n", isIH, startkey, ihK)
 							fmt.Printf("[request = %s]\n", tr.requests[tr.reqIndices[rangeIdx]])
 						}
 						isAccount = len(k) == common.HashLength
 
 						// for Address bucket, skip ih keys longer than 31 bytes
-						//if isAccount {
+						//if wasAccount {
 						//	for len(ihK) > 31 {
 						//		ihK, ihV = ih.Next()
 						//	}
@@ -512,7 +577,7 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 
 						isIH, minKey = keyIsBefore(ihK, k)
 						if tr.trace {
-							fmt.Printf("isIH, minKey = %t, %x\n", isIH, minKey)
+							fmt.Printf("wasIH, minKey = %t, %x\n", isIH, minKey)
 						}
 					} else if cmp > 0 {
 						rangeIdx++
