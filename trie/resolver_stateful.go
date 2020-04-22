@@ -44,11 +44,12 @@ type ResolverStateful struct {
 	roots        []node // roots of the tries that are being built
 	hookFunction hookFunction
 
-	wasIH       bool
-	wasAccount  bool
-	hashData    GenStructStepHashData
-	trace       bool
-	accAddrHash []byte
+	wasIH              bool
+	wasAccount         bool
+	hashData           GenStructStepHashData
+	trace              bool
+	accAddrHashIsValid bool
+	accAddrHash        []byte
 }
 
 func NewResolverStateful(topLevels int, requests []*ResolveRequest, hookFunction hookFunction) *ResolverStateful {
@@ -253,16 +254,44 @@ func (tr *ResolverStateful) RebuildTrie(
 	}
 
 	getAccRot := func(acc common.Hash, incarnation uint64) (common.Hash, error) {
-		var root common.Hash
+		fmt.Printf("Start GetRoot: %x, %d\n", acc, incarnation)
+
+		root := EmptyRoot
+		root2 := EmptyRoot
+		rootIH := EmptyRoot
 		accWithInc := dbutils.GenerateStoragePrefix(acc, incarnation)
 		resolver := NewResolverStateful(0, []*ResolveRequest{
-			tr.currentReq.t.NewResolveRequest(accWithInc, []byte{}, 0, nil),
-		}, func(_ *ResolveRequest, _ node, hash common.Hash) error {
+			tr.currentReq.t.NewResolveRequest(accWithInc, nil, 0, nil),
+		}, func(req *ResolveRequest, node node, hash common.Hash) error {
 			fmt.Printf("GotRoot: %x\n", hash)
+			h := req.t.getHasher()
+			defer returnHasherToPool(h)
+			h.hash(node, true, root2[:])
 			root = hash
 			return nil
 		})
 		err := resolver.RebuildTrie(db, 0, false, false, true)
+		if err != nil {
+			return root, err
+		}
+
+		if err := boltDB.View(func(tx *bolt.Tx) error {
+			v, _ := tx.Bucket(dbutils.IntermediateTrieHashBucket).Get(accWithInc)
+			if v == nil {
+				return ethdb.ErrKeyNotFound
+			}
+
+			rootIH.SetBytes(common.CopyBytes(v))
+			return nil
+		}); err != nil {
+			return root, err
+		}
+
+		if !bytes.Equal(root.Bytes(), rootIH.Bytes()) {
+			fmt.Printf("%x!=%x, %x\n\n", root, rootIH, root2)
+			panic(1)
+		}
+
 		return root, err
 	}
 
@@ -315,12 +344,6 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 		fmt.Printf("Walker: isAcc=%t, isIH=%t, keyIdx: %d key:%x value:%x\n", isAccount, isIH, keyIdx, k, v)
 	}
 
-	// skip old incarnations
-	if !isIH && !isAccount && !bytes.HasPrefix(k, dbutils.GenerateStoragePrefix(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)) {
-		fmt.Printf("Skip incarnation: %x, %x\n", k, dbutils.GenerateStoragePrefix(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation))
-		return nil
-	}
-
 	if keyIdx != tr.keyIdx {
 		if err := tr.finaliseRoot(); err != nil {
 			return err
@@ -331,7 +354,15 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 		tr.currentReq = tr.requests[tr.reqIndices[keyIdx]]
 		tr.currentRs = tr.rss[keyIdx]
 		tr.curr.Reset()
+		tr.accAddrHashIsValid = false
 	}
+
+	// skip old incarnations
+	if !isIH && !isAccount && tr.accAddrHashIsValid && !bytes.HasPrefix(k, dbutils.GenerateStoragePrefix(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)) {
+		fmt.Printf("Skip incarnation: %x, %x\n", k, dbutils.GenerateStoragePrefix(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation))
+		return nil
+	}
+
 	if len(v) > 0 {
 		tr.curr.Reset()
 		tr.curr.Write(tr.succ.Bytes())
@@ -357,117 +388,57 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 		if tr.curr.Len() > 0 {
 			var err error
 			var data GenStructStepData
-			//doGenStructStep := !(!tr.wasIH && tr.wasAccount && !isAccount)
-			doGenStructStep := true
+			//doGenStructStep := true
 
 			if tr.wasIH {
 				tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
 				data = &tr.hashData
-			} else if isAccount {
-				if !tr.wasAccount {
-					tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
-					data = &tr.leafData
-					/*
-						tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
-						if err != nil {
-							return err
-						}
-
-						// print here hash and node stack
-						if !bytes.Equal(tr.a.Root.Bytes(), EmptyRoot.Bytes()) {
-							fmt.Printf("Wish: %x\n", tr.a.Root)
-							fmt.Printf("1: %x\n", tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:len(tr.hb.hashStack)])
-							fmt.Printf("11: %x\n", tr.hb.hashStack)
-							if len(tr.hb.nodeStack) > 0 {
-								n := tr.hb.nodeStack[len(tr.hb.nodeStack)-1]
-								if n != nil {
-									fmt.Printf("1111: %x\n", n.reference())
-								}
-							}
-							if len(tr.hb.nodeStack) > 1 {
-								n := tr.hb.nodeStack[len(tr.hb.nodeStack)-2]
-								if n != nil {
-									fmt.Printf("1111: %x\n", n.reference())
-								}
-							}
-							if len(tr.hb.nodeStack) > 2 {
-								n := tr.hb.nodeStack[len(tr.hb.nodeStack)-3]
-								if n != nil {
-									fmt.Printf("1111: %x\n", n.reference())
-								}
-							}
-						}
-					*/
-				} else {
-					//if !bytes.Equal(tr.a.Root.Bytes(), EmptyRoot.Bytes()) {
-					//	panic("why????")
-					//}
-					//tr.a.Root = EmptyRoot
-					tr.accData.StorageSize = tr.a.StorageSize
-					tr.accData.Balance.Set(&tr.a.Balance)
-					tr.accData.Nonce = tr.a.Nonce
-					tr.accData.Incarnation = tr.a.Incarnation
-					if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
-						tr.accData.FieldSet = AccountFieldSetNotContract
-					} else {
-						if tr.a.HasStorageSize {
-							tr.accData.FieldSet = AccountFieldSetContractWithSize
-						} else {
-							tr.accData.FieldSet = AccountFieldSetContract
-						}
-
-						// the first item ends up deepest on the stack, the second item - on the top
-						err = tr.hb.hash(tr.a.CodeHash[:])
-						if err != nil {
-							return err
-						}
-
-						err = tr.hb.hash(tr.a.Root[:])
-						if err != nil {
-							return err
-						}
-					}
-					data = &tr.accData
-				}
-			} else if !isAccount {
-				if tr.wasAccount {
-					//fmt.Printf("State: !isAccount && tr.wasAccount \n")
-					tr.accData.StorageSize = tr.a.StorageSize
-					tr.accData.Balance.Set(&tr.a.Balance)
-					tr.accData.Nonce = tr.a.Nonce
-					tr.accData.Incarnation = tr.a.Incarnation
-					if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
-						tr.accData.FieldSet = AccountFieldSetNotContract
-					} else {
-						if tr.a.HasStorageSize {
-							tr.accData.FieldSet = AccountFieldSetContractWithSize
-						} else {
-							tr.accData.FieldSet = AccountFieldSetContract
-						}
-
-						// the first item ends up deepest on the stack, the second item - on the top
-						err = tr.hb.hash(tr.a.CodeHash[:])
-						if err != nil {
-							return err
-						}
-
-						err = tr.hb.hash(tr.a.Root[:])
-						if err != nil {
-							return err
-						}
-					}
-					data = &tr.accData
-				} else {
-					tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
-					data = &tr.leafData
-				}
-			}
-
-			if doGenStructStep {
-				tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+			} else if !tr.wasAccount {
+				tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
+				data = &tr.leafData
+			} else {
+				storageHash, err := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
 				if err != nil {
 					return err
 				}
+				tr.a.Root.SetBytes(storageHash[:])
+
+				tr.accData.StorageSize = tr.a.StorageSize
+				tr.accData.Balance.Set(&tr.a.Balance)
+				tr.accData.Nonce = tr.a.Nonce
+				tr.accData.Incarnation = tr.a.Incarnation
+				if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
+					tr.accData.FieldSet = AccountFieldSetNotContract
+				} else {
+					if tr.a.HasStorageSize {
+						tr.accData.FieldSet = AccountFieldSetContractWithSize
+					} else {
+						tr.accData.FieldSet = AccountFieldSetContract
+					}
+
+					// the first item ends up deepest on the stack, the second item - on the top
+					err = tr.hb.hash(tr.a.CodeHash[:])
+					if err != nil {
+						return err
+					}
+
+					err = tr.hb.hash(tr.a.Root[:])
+					if err != nil {
+						return err
+					}
+				}
+				data = &tr.accData
+				//if tr.wasAccount {
+				//	// will call GenStructStep for this acc after all storage (because need calculate acc.root)
+				//} else {
+				//	tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
+				//	data = &tr.leafData
+				//}
+			}
+
+			tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -485,11 +456,7 @@ func (tr *ResolverStateful) Walker(keyIdx int, isAccount, isIH bool, k, v []byte
 			return fmt.Errorf("fail DecodeForStorage: %w", err)
 		}
 
-		storageHash, err := accRoot(common.BytesToHash(k), tr.a.Incarnation)
-		if err != nil {
-			return err
-		}
-		tr.a.Root.SetBytes(storageHash[:])
+		tr.accAddrHashIsValid = true
 		tr.accAddrHash = tr.accAddrHash[:0]
 		tr.accAddrHash = append(tr.accAddrHash, k...)
 	}
