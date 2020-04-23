@@ -501,10 +501,26 @@ func TestStorageResolver(t *testing.T) {
 func TestStorageResolver2(t *testing.T) {
 	require, assert, db := require.New(t), assert.New(t), ethdb.NewMemDatabase()
 
+	kAcc0 := common.FromHex("0000cf1ce0664746d39af9f6db99dc3370282f1d9d48df7f804b7e6499558c83")
 	kAcc := common.FromHex("0001cf1ce0664746d39af9f6db99dc3370282f1d9d48df7f804b7e6499558c83")
 	k1 := "290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563"
 	ks1 := dbutils.GenerateCompositeStorageKey(common.BytesToHash(kAcc), 1, common.HexToHash(k1))
 	require.NoError(db.Put(dbutils.CurrentStateBucket, ks1, common.FromHex("7a381122bada791a7ab1f6037dac80432753baad")))
+
+	a0 := accounts.Account{
+		Nonce:          uint64(1),
+		Initialised:    true,
+		CodeHash:       EmptyCodeHash,
+		Balance:        *big.NewInt(0),
+		StorageSize:    uint64(1),
+		Incarnation:    1,
+		HasStorageSize: true,
+		Root:           EmptyRoot,
+	}
+
+	if err := writeAccount(db, common.BytesToHash(kAcc0), a0); err != nil {
+		panic(err)
+	}
 
 	a := accounts.Account{
 		Nonce:          uint64(1),
@@ -514,12 +530,13 @@ func TestStorageResolver2(t *testing.T) {
 		StorageSize:    uint64(1),
 		Incarnation:    1,
 		HasStorageSize: true,
-		//Root:           common.HexToHash("28d28aa6f1d0179248560a25a1a4ad69be1cdeab9e2b24bc9f9c70608e3a7ec0"),
+		Root:           common.HexToHash("28d28aa6f1d0179248560a25a1a4ad69be1cdeab9e2b24bc9f9c70608e3a7ec0"),
 	}
 
 	if err := writeAccount(db, common.BytesToHash(kAcc), a); err != nil {
 		panic(err)
 	}
+
 	/*
 		Start GetRoot: 0001cf1ce0664746d39af9f6db99dc3370282f1d9d48df7f804b7e6499558c83, 1
 		RebuildTrie 1, blockNr 0
@@ -532,11 +549,11 @@ func TestStorageResolver2(t *testing.T) {
 	expectedAccRoot := "28d28aa6f1d0179248560a25a1a4ad69be1cdeab9e2b24bc9f9c70608e3a7ec0"
 	_ = expectedAccRoot
 
-	expectedRoot := "53f8a2cd660f85d6d0d3a861d2869e57df0b6262685b188cbf8eb588609a16bb"
+	expectedRoot := "bef017bea53871a5e08b1d453858ad624d0bf94111df96d7434cb6116efef352"
 
 	tr := New(common.Hash{})
 	{
-		resolver := NewResolver(1, true, 0)
+		resolver := NewResolver(1000, true, 0)
 		resolver.AddRequest(tr.NewResolveRequest(nil, common.FromHex("00000001"), 0, common.FromHex(expectedRoot)))
 		err := resolver.ResolveWithDb(db, 0, true)
 		require.NoError(err)

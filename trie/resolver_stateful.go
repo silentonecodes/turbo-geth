@@ -25,21 +25,25 @@ var (
 type hookFunction func(*ResolveRequest, node, common.Hash) error
 
 type ResolverStateful struct {
-	rss        []*ResolveSet
-	curr       bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
-	succ       bytes.Buffer
-	value      bytes.Buffer // Current value to be used as the value tape for the hash builder
-	groups     []uint16
-	reqIndices []int // Indices pointing back to request slice from slices returned by PrepareResolveParams
-	hb         *HashBuilder
-	topLevels  int             // How many top levels of the trie to keep (not roll into hashes)
-	currentReq *ResolveRequest // Request currently being handled
-	currentRs  *ResolveSet     // ResolveSet currently being used
-	keyIdx     int
-	a          accounts.Account
-	leafData   GenStructStepLeafData
-	accData    GenStructStepAccountData
-	requests   []*ResolveRequest
+	rss         []*ResolveSet
+	curr        *bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
+	succ        *bytes.Buffer
+	currAcc     *bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
+	succAcc     *bytes.Buffer
+	currStorage *bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
+	succStorage *bytes.Buffer
+	value       bytes.Buffer // Current value to be used as the value tape for the hash builder
+	groups      []uint16
+	reqIndices  []int // Indices pointing back to request slice from slices returned by PrepareResolveParams
+	hb          *HashBuilder
+	topLevels   int             // How many top levels of the trie to keep (not roll into hashes)
+	currentReq  *ResolveRequest // Request currently being handled
+	currentRs   *ResolveSet     // ResolveSet currently being used
+	keyIdx      int
+	a           accounts.Account
+	leafData    GenStructStepLeafData
+	accData     GenStructStepAccountData
+	requests    []*ResolveRequest
 
 	roots        []node // roots of the tries that are being built
 	hookFunction hookFunction
@@ -60,6 +64,12 @@ func NewResolverStateful(topLevels int, requests []*ResolveRequest, hookFunction
 		requests:     requests,
 		hookFunction: hookFunction,
 		accAddrHash:  []byte{},
+		curr:         &bytes.Buffer{},
+		succ:         &bytes.Buffer{},
+		currAcc:      &bytes.Buffer{},
+		succAcc:      &bytes.Buffer{},
+		currStorage:  &bytes.Buffer{},
+		succStorage:  &bytes.Buffer{},
 	}
 }
 
@@ -76,6 +86,10 @@ func (tr *ResolverStateful) Reset(topLevels int, requests []*ResolveRequest, hoo
 	tr.hookFunction = hookFunction
 	tr.curr.Reset()
 	tr.succ.Reset()
+	tr.currStorage.Reset()
+	tr.succStorage.Reset()
+	tr.currAcc.Reset()
+	tr.succAcc.Reset()
 	tr.value.Reset()
 	tr.groups = tr.groups[:0]
 	tr.a.Reset()
@@ -147,12 +161,71 @@ func (tr *ResolverStateful) finaliseRoot(accRoot getAccRootF) error {
 		} else if !tr.wasAccount {
 			tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
 			data = &tr.leafData
-		} else {
-			storageHash, err2 := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
-			if err2 != nil {
-				return err2
+			if tr.accAddrHashIsValid {
+				tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+				if err != nil {
+					return err
+				}
+				tr.curr = tr.currAcc
+				tr.succ = tr.succAcc
+				tr.curr.Reset()
+				tr.curr.Write(tr.succ.Bytes())
+				tr.succ.Reset()
+
+				//storageHash, storageNode, err2 := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
+				//if err2 != nil {
+				//	return err2
+				//}
+				tr.a.Root.SetBytes(common.CopyBytes(tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:]))
+				tr.hb.hashStack = tr.hb.hashStack[:len(tr.hb.hashStack)-common.HashLength-1]
+				storageNode := tr.hb.nodeStack[len(tr.hb.nodeStack)-1]
+				tr.hb.nodeStack = tr.hb.nodeStack[:len(tr.hb.nodeStack)-1]
+				fmt.Printf("hashStack: %x, %x\n", tr.a.Root, tr.hb.hashStack)
+
+				if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
+					tr.accData.FieldSet = AccountFieldSetNotContract
+				} else {
+					if tr.a.HasStorageSize {
+						tr.accData.FieldSet = AccountFieldSetContractWithSize
+					} else {
+						tr.accData.FieldSet = AccountFieldSetContract
+					}
+				}
+
+				tr.accData.StorageSize = tr.a.StorageSize
+				tr.accData.Balance.Set(&tr.a.Balance)
+				tr.accData.Nonce = tr.a.Nonce
+				tr.accData.Incarnation = tr.a.Incarnation
+				data = &tr.accData
+
+				if !tr.a.IsEmptyCodeHash() || !tr.a.IsEmptyRoot() {
+					// the first item ends up deepest on the stack, the second item - on the top
+					err = tr.hb.hash(tr.a.CodeHash[:])
+					if err != nil {
+						return err
+					}
+
+					//_ = storageNode
+					//if tr.hb.trace {
+					//	fmt.Printf("HASH\n")
+					//}
+					tr.hb.hashStack = append(tr.hb.hashStack, 0x80+common.HashLength)
+					tr.hb.hashStack = append(tr.hb.hashStack, tr.a.Root[:]...)
+					tr.hb.nodeStack = append(tr.hb.nodeStack, storageNode)
+					fmt.Printf("hashStack: %x, %x\n", tr.a.Root, tr.hb.hashStack)
+
+					//err = tr.hb.hash(tr.a.Root[:])
+					//if err != nil {
+					//	return err
+					//}
+				}
 			}
-			tr.a.Root.SetBytes(storageHash.Bytes())
+		} else {
+			//storageHash, storageNode, err2 := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
+			//if err2 != nil {
+			//	return err2
+			//}
+			tr.a.Root.SetBytes(common.CopyBytes(EmptyRoot.Bytes()))
 
 			if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
 				tr.accData.FieldSet = AccountFieldSetNotContract
@@ -175,6 +248,13 @@ func (tr *ResolverStateful) finaliseRoot(accRoot getAccRootF) error {
 				if err != nil {
 					return err
 				}
+
+				//if tr.hb.trace {
+				//	fmt.Printf("HASH\n")
+				//}
+				tr.hb.hashStack = append(tr.hb.hashStack, 0x80+common.HashLength)
+				tr.hb.hashStack = append(tr.hb.hashStack, tr.a.Root[:]...)
+				//tr.hb.nodeStack = append(tr.hb.nodeStack, storageNode)
 
 				err = tr.hb.hash(tr.a.Root[:])
 				if err != nil {
@@ -229,19 +309,21 @@ func (tr *ResolverStateful) RebuildTrie(
 		return fmt.Errorf("only Bolt supported yet, given: %T", db)
 	}
 
-	getAccRot := func(acc common.Hash, incarnation uint64) (common.Hash, error) {
+	getAccRot := func(acc common.Hash, incarnation uint64) (common.Hash, node, error) {
+		var n node
 		root := EmptyRoot
 		root2 := EmptyRoot
 		rootIH := EmptyRoot
 		accWithInc := dbutils.GenerateStoragePrefix(acc, incarnation)
 		resolver := NewResolverStateful(0, []*ResolveRequest{
 			tr.currentReq.t.NewResolveRequest(accWithInc, nil, 0, nil),
-		}, func(req *ResolveRequest, node node, hash common.Hash) error {
+		}, func(req *ResolveRequest, nn node, hash common.Hash) error {
+			n = nn
 			root.SetBytes(common.CopyBytes(hash.Bytes()))
 
 			h := req.t.getHasher()
 			defer returnHasherToPool(h)
-			if _, err := h.hash(node, true, root2[:]); err != nil {
+			if _, err := h.hash(nn, true, root2[:]); err != nil {
 				return err
 			}
 
@@ -249,10 +331,12 @@ func (tr *ResolverStateful) RebuildTrie(
 		})
 
 		if err := resolver.RebuildTrie(db, 0, false, false, false); err != nil {
-			return root, err
+			return root, nil, err
 		}
 
 		if err := boltDB.View(func(tx *bolt.Tx) error {
+			fmt.Printf("get ih root %x\n", accWithInc)
+
 			v, _ := tx.Bucket(dbutils.IntermediateTrieHashBucket).Get(accWithInc)
 			if v == nil {
 				return ethdb.ErrKeyNotFound
@@ -261,15 +345,15 @@ func (tr *ResolverStateful) RebuildTrie(
 			rootIH.SetBytes(common.CopyBytes(v))
 			return nil
 		}); err != nil {
-			return root, err
+			return root, nil, err
 		}
 
-		//if !(bytes.Equal(root.Bytes(), rootIH.Bytes()) && bytes.Equal(root.Bytes(), root2.Bytes())) {
-		//	fmt.Printf("%x!=%x!=%x\n\n", root, rootIH, root2)
-		//	panic(1)
-		//}
+		if !(bytes.Equal(root.Bytes(), rootIH.Bytes()) && bytes.Equal(root.Bytes(), root2.Bytes())) {
+			fmt.Printf("%x!=%x!=%x\n\n", root, rootIH, root2)
+			panic(1)
+		}
 
-		return root, nil
+		return root, n, nil
 	}
 
 	var err error
@@ -330,6 +414,14 @@ func (tr *ResolverStateful) Walker(isIH bool, keyIdx int, k, v []byte, accRoot g
 		fmt.Printf("Walker: %t, keyIdx: %d key:%x  value:%x, isIH: %v\n", isAccount, keyIdx, k, v, isIH)
 	}
 
+	if isAccount {
+		tr.curr = tr.currAcc
+		tr.succ = tr.succAcc
+	} else {
+		tr.curr = tr.currStorage
+		tr.succ = tr.succStorage
+	}
+
 	if keyIdx != tr.keyIdx {
 		if err := tr.finaliseRoot(accRoot); err != nil {
 			return err
@@ -340,6 +432,8 @@ func (tr *ResolverStateful) Walker(isIH bool, keyIdx int, k, v []byte, accRoot g
 		tr.currentReq = tr.requests[tr.reqIndices[keyIdx]]
 		tr.currentRs = tr.rss[keyIdx]
 		tr.curr.Reset()
+		tr.currStorage.Reset()
+		tr.currAcc.Reset()
 		tr.accAddrHashIsValid = false
 		tr.accAddrHash = tr.accAddrHash[:0]
 	}
@@ -348,7 +442,9 @@ func (tr *ResolverStateful) Walker(isIH bool, keyIdx int, k, v []byte, accRoot g
 		tr.curr.Write(tr.succ.Bytes())
 		tr.succ.Reset()
 		skip := tr.currentReq.extResolvePos // how many first nibbles to skip
-
+		if tr.accAddrHashIsValid && !isAccount {
+			skip += 80
+		}
 		i := 0
 		for _, b := range k {
 			if i >= skip {
@@ -368,50 +464,129 @@ func (tr *ResolverStateful) Walker(isIH bool, keyIdx int, k, v []byte, accRoot g
 		if tr.curr.Len() > 0 {
 			var err error
 			var data GenStructStepData
+			var doGenStr bool
 			if tr.wasIH {
 				tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
 				data = &tr.hashData
+				doGenStr = true
 			} else if !tr.wasAccount {
-				tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
-				data = &tr.leafData
-			} else {
-				storageHash, err2 := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
-				if err2 != nil {
-					return err2
-				}
-				tr.a.Root.SetBytes(storageHash.Bytes())
+				if isAccount {
+					tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
+					data = &tr.leafData
+					tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+					if err != nil {
+						return err
+					}
+					tr.curr = tr.currAcc
+					tr.succ = tr.succAcc
+					tr.curr.Reset()
+					tr.curr.Write(tr.succ.Bytes())
+					tr.succ.Reset()
 
-				if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
-					tr.accData.FieldSet = AccountFieldSetNotContract
-				} else {
-					if tr.a.HasStorageSize {
-						tr.accData.FieldSet = AccountFieldSetContractWithSize
+					//storageHash, storageNode, err2 := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
+					//if err2 != nil {
+					//	return err2
+					//}
+					tr.a.Root.SetBytes(common.CopyBytes(tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength:]))
+					tr.hb.hashStack = tr.hb.hashStack[len(tr.hb.hashStack)-common.HashLength-1:]
+					storageNode := tr.hb.nodeStack[len(tr.hb.nodeStack)-1]
+					tr.hb.nodeStack = tr.hb.nodeStack[:len(tr.hb.nodeStack)-1]
+					if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
+						tr.accData.FieldSet = AccountFieldSetNotContract
 					} else {
-						tr.accData.FieldSet = AccountFieldSetContract
+						if tr.a.HasStorageSize {
+							tr.accData.FieldSet = AccountFieldSetContractWithSize
+						} else {
+							tr.accData.FieldSet = AccountFieldSetContract
+						}
 					}
+
+					tr.accData.StorageSize = tr.a.StorageSize
+					tr.accData.Balance.Set(&tr.a.Balance)
+					tr.accData.Nonce = tr.a.Nonce
+					tr.accData.Incarnation = tr.a.Incarnation
+					data = &tr.accData
+
+					if !tr.a.IsEmptyCodeHash() || !tr.a.IsEmptyRoot() {
+						// the first item ends up deepest on the stack, the second item - on the top
+						err = tr.hb.hash(tr.a.CodeHash[:])
+						if err != nil {
+							return err
+						}
+
+						//if tr.hb.trace {
+						//	fmt.Printf("HASH\n")
+						//}
+						tr.hb.hashStack = append(tr.hb.hashStack, 0x80+common.HashLength)
+						tr.hb.hashStack = append(tr.hb.hashStack, tr.a.Root[:]...)
+						tr.hb.nodeStack = append(tr.hb.nodeStack, storageNode)
+						fmt.Printf("hashStack: %x, %x\n", tr.a.Root, tr.hb.hashStack)
+
+						//err = tr.hb.hash(tr.a.Root[:])
+						//if err != nil {
+						//	return err
+						//}
+					}
+					doGenStr = true
+				} else {
+					tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.value.Bytes())
+					data = &tr.leafData
+					doGenStr = true
 				}
+			} else {
+				if isAccount {
+					//storageHash, storageNode, err2 := accRoot(common.BytesToHash(tr.accAddrHash), tr.a.Incarnation)
+					//if err2 != nil {
+					//	return err2
+					//}
+					tr.a.Root = EmptyRoot
 
-				tr.accData.StorageSize = tr.a.StorageSize
-				tr.accData.Balance.Set(&tr.a.Balance)
-				tr.accData.Nonce = tr.a.Nonce
-				tr.accData.Incarnation = tr.a.Incarnation
-				data = &tr.accData
-
-				if !tr.a.IsEmptyCodeHash() || !tr.a.IsEmptyRoot() {
-					// the first item ends up deepest on the stack, the second item - on the top
-					err = tr.hb.hash(tr.a.CodeHash[:])
-					if err != nil {
-						return err
+					if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
+						tr.accData.FieldSet = AccountFieldSetNotContract
+					} else {
+						if tr.a.HasStorageSize {
+							tr.accData.FieldSet = AccountFieldSetContractWithSize
+						} else {
+							tr.accData.FieldSet = AccountFieldSetContract
+						}
 					}
-					err = tr.hb.hash(tr.a.Root[:])
-					if err != nil {
-						return err
+
+					tr.accData.StorageSize = tr.a.StorageSize
+					tr.accData.Balance.Set(&tr.a.Balance)
+					tr.accData.Nonce = tr.a.Nonce
+					tr.accData.Incarnation = tr.a.Incarnation
+					data = &tr.accData
+
+					if !tr.a.IsEmptyCodeHash() || !tr.a.IsEmptyRoot() {
+						// the first item ends up deepest on the stack, the second item - on the top
+						//err = tr.hb.hash(tr.a.CodeHash[:])
+						//if err != nil {
+						//	return err
+						//}
+
+						//_ = storageNode
+						//if tr.hb.trace {
+						//	fmt.Printf("HASH\n")
+						//}
+						//tr.hb.hashStack = append(tr.hb.hashStack, 0x80+common.HashLength)
+						//tr.hb.hashStack = append(tr.hb.hashStack, tr.a.Root[:]...)
+						//tr.hb.nodeStack = append(tr.hb.nodeStack, storageNode)
+
+						err = tr.hb.hash(tr.a.Root[:])
+						if err != nil {
+							return err
+						}
+						doGenStr = true
+					} else {
+						doGenStr = false
 					}
 				}
 			}
-			tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
-			if err != nil {
-				return err
+			if doGenStr {
+				tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		// Remember the current key and value
@@ -436,7 +611,7 @@ func (tr *ResolverStateful) Walker(isIH bool, keyIdx int, k, v []byte, accRoot g
 	return nil
 }
 
-type getAccRootF = func(acc common.Hash, incarnation uint64) (common.Hash, error)
+type getAccRootF = func(acc common.Hash, incarnation uint64) (common.Hash, node, error)
 
 // MultiWalk2 - looks similar to db.MultiWalk but works with hardcoded 2-nd bucket IntermediateTrieHashBucket
 func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbits []uint, walker func(isIH bool, keyIdx int, k, v []byte, accRoot getAccRootF) error, isAccount bool, accRoot getAccRootF) error {
@@ -468,19 +643,20 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 		var minKey []byte
 		var isIH bool
 		for k != nil || ihK != nil {
+
 			// for Address bucket, skip ih keys longer than 31 bytes
-			if isAccount {
-				for len(ihK) > 31 {
-					ihK, ihV = ih.Next()
-				}
-				for len(k) > 32 {
-					k, v = c.Next()
-				}
-			} else {
-				for len(k) == 32 {
-					k, v = c.Next()
-				}
-			}
+			//if isAccount {
+			//	for len(ihK) > 31 {
+			//		ihK, ihV = ih.Next()
+			//	}
+			//	for len(k) > 32 {
+			//		k, v = c.Next()
+			//	}
+			//} else {
+			//	for len(k) == 32 {
+			//		k, v = c.Next()
+			//	}
+			//}
 			if ihK == nil && k == nil {
 				break
 			}
@@ -527,18 +703,18 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 							fmt.Printf("[request = %s]\n", tr.requests[tr.reqIndices[rangeIdx]])
 						}
 						// for Address bucket, skip ih keys longer than 31 bytes
-						if isAccount {
-							for len(ihK) > 31 {
-								ihK, ihV = ih.Next()
-							}
-							for len(k) > 32 {
-								k, v = c.Next()
-							}
-						} else {
-							for len(k) == 32 {
-								k, v = c.Next()
-							}
-						}
+						//if isAccount {
+						//	for len(ihK) > 31 {
+						//		ihK, ihV = ih.Next()
+						//	}
+						//	for len(k) > 32 {
+						//		k, v = c.Next()
+						//	}
+						//} else {
+						//	for len(k) == 32 {
+						//		k, v = c.Next()
+						//	}
+						//}
 						if k == nil && ihK == nil {
 							return nil
 						}
@@ -582,7 +758,7 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 			}
 
 			canUseIntermediateHash = currentRs.HashOnly(keyAsNibbles.B[currentReq.extResolvePos:])
-			//canUseIntermediateHash = false
+			canUseIntermediateHash = false
 			if !canUseIntermediateHash { // can't use ih as is, need go to children
 				ihK, ihV = ih.Next() // go to children, not to sibling
 				continue
