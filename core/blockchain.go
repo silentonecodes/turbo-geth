@@ -1590,7 +1590,9 @@ func (bc *BlockChain) insertChain(ctx context.Context, chain types.Blocks, verif
 	}
 
 	// Start a parallel signature recovery (signer will fluke on fork transition, minimal perf loss)
-	senderCacher.recoverFromBlocks(types.MakeSigner(bc.chainConfig, chain[0].Number()), chain)
+	if execute {
+		senderCacher.recoverFromBlocks(types.MakeSigner(bc.chainConfig, chain[0].Number()), chain)
+	}
 
 	var k int
 	var committedK int
