@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"runtime/pprof"
 
 	"github.com/ledgerwatch/turbo-geth/common"
 	"github.com/ledgerwatch/turbo-geth/common/dbutils"
@@ -11,6 +13,8 @@ import (
 	"github.com/ledgerwatch/turbo-geth/log"
 	"github.com/ledgerwatch/turbo-geth/rlp"
 )
+
+var profileNumberBodies uint64
 
 func (d *Downloader) spawnBodyDownloadStage(id string) (bool, error) {
 	// Create cancel channel for aborting mid-flight and mark the master peer
@@ -63,6 +67,16 @@ func (d *Downloader) spawnBodyDownloadStage(id string) (bool, error) {
 	}
 	// Figure out how many headers we have
 	currentNumber := origin + 1
+	if profileNumberBodies == 0 {
+		profileNumberBodies = currentNumber
+		f, err := os.Create(fmt.Sprintf("cpubodies-%d.prof", profileNumberBodies))
+		if err != nil {
+			log.Error("could not create CPU profile", "error", err)
+		}
+		if err1 := pprof.StartCPUProfile(f); err1 != nil {
+			log.Error("could not start CPU profile", "error", err1)
+		}
+	}
 	var missingHeader uint64
 	// Go over canonical headers and insert them into the queue
 	const N = 65536
@@ -80,6 +94,10 @@ func (d *Downloader) spawnBodyDownloadStage(id string) (bool, error) {
 				return false, nil
 			}
 			currentNumber++
+			if currentNumber-profileNumberBodies == 1000000 {
+				// Flush the profiler
+				pprof.StopCPUProfile()
+			}
 			if hashCount < len(hashes) {
 				copy(hashes[hashCount][:], v)
 			}
