@@ -94,7 +94,7 @@ func (d *Downloader) spawnBodyDownloadStage(id string) (bool, error) {
 				return false, nil
 			}
 			currentNumber++
-			if currentNumber-profileNumberBodies == 1000000 {
+			if currentNumber-profileNumberBodies == 500000 {
 				// Flush the profiler
 				pprof.StopCPUProfile()
 			}
