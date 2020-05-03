@@ -1940,6 +1940,7 @@ func resetState(chaindata string) {
 	check(err)
 	err = downloader.SaveStageProgress(db, downloader.Execution, 0)
 	check(err)
+	fmt.Printf("Reset state done\n")
 }
 
 func main() {
