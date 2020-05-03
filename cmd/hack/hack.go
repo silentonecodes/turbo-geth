@@ -2069,4 +2069,7 @@ func main() {
 	if *action == "slice" {
 		dbSlice(*chaindata, common.FromHex(*hash))
 	}
+	if *action == "execBlockStaged" {
+		execBlockStaged(*chaindata)
+	}
 }
