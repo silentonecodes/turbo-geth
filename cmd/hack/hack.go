@@ -1926,6 +1926,20 @@ func walkOverStorage(chaindata string) {
 	fmt.Printf("Success\n")
 }
 
+func execBlockStaged(chaindata string) {
+	db, err := ethdb.NewBoltDatabase(chaindata)
+	check(err)
+	defer db.Close()
+	bc, err := core.NewBlockChain(db, nil, params.MainnetChainConfig, ethash.NewFaker(), vm.Config{}, nil)
+	check(err)
+	blockNum := uint64(9235358)
+	block := bc.GetBlockByNumber(blockNum)
+	stateReader := state.NewDbStateReader(db)
+	stateWriter := state.NewDbStateWriter(db, blockNum)	
+	err = bc.ExecuteBlockEuphemerally(block, stateReader, stateWriter)
+	check(err)
+}
+
 func main() {
 	var (
 		ostream log.Handler
