@@ -1932,7 +1932,7 @@ func execBlockStaged(chaindata string) {
 	defer db.Close()
 	bc, err := core.NewBlockChain(db, nil, params.MainnetChainConfig, ethash.NewFaker(), vm.Config{}, nil)
 	check(err)
-	blockNum := uint64(9235358)
+	blockNum := uint64(9235357)
 	block := bc.GetBlockByNumber(blockNum)
 	parentBlock := bc.GetBlockByNumber(blockNum-1)
 	stateReader := state.NewDbStateReader(db)
@@ -1972,6 +1972,7 @@ func execBlockStaged(chaindata string) {
 			fmt.Printf("Commit failed: %v\n", err)
 			break
 		}
+		blockNum--
 	}
 }
 
