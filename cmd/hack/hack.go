@@ -1937,7 +1937,22 @@ func execBlockStaged(chaindata string) {
 	stateReader := state.NewDbStateReader(db)
 	stateWriter := state.NewDbStateWriter(db, blockNum)	
 	err = bc.ExecuteBlockEuphemerally(block, stateReader, stateWriter)
-	check(err)
+	if err != nil {
+		fmt.Printf("Executed failed: %v\n", err)
+	}
+	tr := trie.New(block.Root())
+	// making resolve request for the trie root, so we only get a hash
+	rr := tr.NewResolveRequest(nil, []byte{}, 0, tr.Root())
+
+	log.Info("Validating root hash", "block", blockNum, "blockRoot", block.Root().Hex())
+
+	resolver := trie.NewResolver(0, blockNum)
+	resolver.AddRequest(rr)
+	err = resolver.ResolveStateful(db, blockNum, false)
+	if err != nil {
+		fmt.Printf("Resolving error: %v\n", err)
+	}
+
 }
 
 func main() {
