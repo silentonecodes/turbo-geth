@@ -1941,19 +1941,114 @@ func execBlockStaged(chaindata string) {
 	if err != nil {
 		fmt.Printf("Executed failed: %v\n", err)
 	}
-	tr := trie.New(parentBlock.Root())
-	// making resolve request for the trie root, so we only get a hash
-	rr := tr.NewResolveRequest(nil, []byte{}, 0, tr.Root())
+	for {
+		tr := trie.New(parentBlock.Root())
+		// making resolve request for the trie root, so we only get a hash
+		rr := tr.NewResolveRequest(nil, []byte{}, 0, tr.Root())
 
-	log.Info("Validating root hash", "block", blockNum, "blockRoot", parentBlock.Root().Hex())
+		log.Info("Validating root hash", "block", blockNum, "blockRoot", parentBlock.Root().Hex())
 
-	resolver := trie.NewResolver(0, blockNum)
-	resolver.AddRequest(rr)
-	err = resolver.ResolveStateful(db, blockNum, false)
+		resolver := trie.NewResolver(0, blockNum)
+		resolver.AddRequest(rr)
+		err = resolver.ResolveStateful(db, blockNum, false)
+		if err != nil {
+			fmt.Printf("Resolving error: %v\n", err)
+		} else {
+			fmt.Printf("Match!\n")
+			break
+		}
+		lastBlock := blockNum - 1
+		unwindBlock := lastBlock - 1
+		parentBlock = bc.GetBlockByNumber(unwindBlock)
+		fmt.Printf("Unwinding from %d to %d\n", lastBlock, unwindBlock)
+		batch := db.NewBatch()
+		err = Unwind(batch, lastBlock, unwindBlock)
+		if err != nil {
+			fmt.Printf("Unwind failed: %v\n", err)
+			break
+		}
+		_, err = batch.Commit()
+		if err != nil {
+			fmt.Printf("Commit failed: %v\n", err)
+			break
+		}
+	}
+}
+
+func Unwind(db ethdb.Database, lastBlock, blockNr uint64) error {
+
+	accountMap, storageMap, err := db.RewindData(lastBlock, blockNr)
 	if err != nil {
-		fmt.Printf("Resolving error: %v\n", err)
+		return err
+	}
+	for key, value := range accountMap {
+		var addrHash common.Hash
+		copy(addrHash[:], []byte(key))
+		if len(value) > 0 {
+			var acc accounts.Account
+			if err := acc.DecodeForStorage(value); err != nil {
+				return err
+			}
+			// Fetch the code hash
+			if acc.Incarnation > 0 && acc.IsEmptyCodeHash() {
+				if codeHash, err := db.Get(dbutils.ContractCodeBucket, dbutils.GenerateStoragePrefix(addrHash[:], acc.Incarnation)); err == nil {
+					copy(acc.CodeHash[:], codeHash)
+				}
+			}
+			if err := rawdb.WriteAccount(db, addrHash, acc); err != nil {
+				return err
+			}
+		} else {
+			if err := rawdb.DeleteAccount(db, addrHash); err != nil {
+				return err
+			}
+		}
+	}
+	for key, value := range storageMap {
+		var addrHash common.Hash
+		copy(addrHash[:], []byte(key)[:common.HashLength])
+		var keyHash common.Hash
+		copy(keyHash[:], []byte(key)[common.HashLength+common.IncarnationLength:])
+		if len(value) > 0 {
+			if err := db.Put(dbutils.CurrentStateBucket, []byte(key)[:common.HashLength+common.IncarnationLength+common.HashLength], value); err != nil {
+				return err
+			}
+		} else {
+			if err := db.Delete(dbutils.CurrentStateBucket, []byte(key)[:common.HashLength+common.IncarnationLength+common.HashLength]); err != nil {
+				return err
+			}
+		}
 	}
 
+	for i := lastBlock; i > blockNr; i-- {
+		if err := deleteTimestamp(db, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteTimestamp(db ethdb.Database, timestamp uint64) error {
+	changeSetKey := dbutils.EncodeTimestamp(timestamp)
+	changedAccounts, err := db.Get(dbutils.AccountChangeSetBucket, changeSetKey)
+	if err != nil && err != ethdb.ErrKeyNotFound {
+		return err
+	}
+	changedStorage, err := db.Get(dbutils.StorageChangeSetBucket, changeSetKey)
+	if err != nil && err != ethdb.ErrKeyNotFound {
+		return err
+	}
+	if len(changedAccounts) > 0 {
+		if err := db.Delete(dbutils.AccountChangeSetBucket, changeSetKey); err != nil {
+			return err
+		}
+	}
+	if len(changedStorage) > 0 {
+		if err := db.Delete(dbutils.StorageChangeSetBucket, changeSetKey); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func main() {
