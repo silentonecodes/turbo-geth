@@ -2,8 +2,8 @@ package downloader
 
 import (
 	"fmt"
-	//"os"
-	//"runtime/pprof"
+	"os"
+	"runtime/pprof"
 	"sync/atomic"
 	"time"
 
@@ -66,18 +66,16 @@ func (d *Downloader) spawnExecuteBlocksStage() (uint64, error) {
 
 	atomic.StoreUint64(&nextBlockNumber, lastProcessedBlockNumber+1)
 
-	/*
-		profileNumber := atomic.LoadUint64(&nextBlockNumber)
-		f, err := os.Create(fmt.Sprintf("cpu-%d.prof", profileNumber))
-		if err != nil {
-			log.Error("could not create CPU profile", "error", err)
-			return lastProcessedBlockNumber, err
-		}
-		if err1 := pprof.StartCPUProfile(f); err1 != nil {
-			log.Error("could not start CPU profile", "error", err1)
-			return lastProcessedBlockNumber, err
-		}
-	*/
+	profileNumber := atomic.LoadUint64(&nextBlockNumber)
+	f, err := os.Create(fmt.Sprintf("cpu-%d.prof", profileNumber))
+	if err != nil {
+		log.Error("could not create CPU profile", "error", err)
+		return lastProcessedBlockNumber, err
+	}
+	if err1 := pprof.StartCPUProfile(f); err1 != nil {
+		log.Error("could not start CPU profile", "error", err1)
+		return lastProcessedBlockNumber, err
+	}
 
 	mutation := d.stateDB.NewBatch()
 	defer func() {
@@ -123,12 +121,10 @@ func (d *Downloader) spawnExecuteBlocksStage() (uint64, error) {
 			mutation = d.stateDB.NewBatch()
 		}
 
-		/*
-			if blockNum-profileNumber == 100000 {
-				// Flush the profiler
-				pprof.StopCPUProfile()
-			}
-		*/
+		if blockNum-profileNumber == 100000 {
+			// Flush the profiler
+			pprof.StopCPUProfile()
+		}
 	}
 
 	return atomic.LoadUint64(&nextBlockNumber) - 1 /* the last processed block */, nil
