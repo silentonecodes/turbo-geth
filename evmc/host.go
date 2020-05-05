@@ -17,7 +17,6 @@ import (
 	"unsafe"
 
 	"github.com/ledgerwatch/turbo-geth/common"
-	"github.com/ledgerwatch/turbo-geth/log"
 )
 
 type CallKind int
@@ -195,20 +194,11 @@ func emitLog(pCtx unsafe.Pointer, pAddr *C.evmc_address, pData unsafe.Pointer, d
 	ctx.EmitLog(goAddress(*pAddr), topics, data)
 }
 
-var MaxDepth int
-
 //export call
 func call(pCtx unsafe.Pointer, msg *C.struct_evmc_message) C.struct_evmc_result {
 	ctx := getHostContext(uintptr(pCtx))
 
 	kind := CallKind(msg.kind)
-	if int(msg.depth) > MaxDepth {
-		MaxDepth = int(msg.depth)
-		log.Info("MaxDepth went up to", "depth", MaxDepth)
-		if MaxDepth == 1024 {
-			panic("MaxDepth 1024 reaced")
-		}
-	}
 	output, gasLeft, createAddr, err := ctx.Call(kind, goAddress(msg.destination), goAddress(msg.sender), goHash(msg.value).Big(),
 		goByteSlice(msg.input_data, msg.input_size), int64(msg.gas), int(msg.depth), msg.flags != 0, goHash(msg.create2_salt).Big())
 
