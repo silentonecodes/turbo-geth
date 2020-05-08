@@ -423,96 +423,53 @@ func (tr *ResolverStateful) WalkerStorage(isIH bool, keyIdx int, k, v []byte) er
 		fmt.Printf("WalkerStorage: isIH=%v keyIdx=%d key=%x value=%x\n", isIH, keyIdx, k, v)
 	}
 
-	if keyIdx != tr.keyIdx {
-		if err := tr.finaliseRoot(); err != nil {
+	tr.currStorage.Reset()
+	tr.currStorage.Write(tr.succStorage.Bytes())
+	tr.succStorage.Reset()
+	skip := tr.currentReq.extResolvePos // how many first nibbles to skip
+
+	if skip < 80 {
+		skip = 80
+	}
+
+	i := 0
+	for _, b := range k {
+		if i >= skip {
+			tr.succStorage.WriteByte(b / 16)
+		}
+		i++
+		if i >= skip {
+			tr.succStorage.WriteByte(b % 16)
+		}
+		i++
+	}
+
+	if !isIH {
+		tr.succStorage.WriteByte(16)
+	}
+
+	if tr.currStorage.Len() > 0 {
+		var err error
+		var data GenStructStepData
+		if tr.trace {
+			fmt.Printf("tr.wasIHStorage=%t\n", tr.wasIHStorage)
+		}
+		if tr.wasIHStorage {
+			tr.hashData.Hash = common.BytesToHash(tr.valueStorage.Bytes())
+			data = &tr.hashData
+		} else {
+			tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.valueStorage.Bytes())
+			data = &tr.leafData
+		}
+		tr.groupsStorage, err = GenStructStep(tr.rssChopped[tr.keyIdx].HashOnly, tr.currStorage.Bytes(), tr.succStorage.Bytes(), tr.hbStorage, data, tr.groupsStorage, false)
+		if err != nil {
 			return err
 		}
-		tr.hb.Reset()
-		tr.wasIH = false
-		tr.groups = nil
-		tr.keyIdx = keyIdx
-		tr.currentReq = tr.requests[tr.reqIndices[keyIdx]]
-		tr.currentRs = tr.rss[keyIdx]
-		tr.currentRsChopped = tr.rssChopped[keyIdx]
-		tr.curr.Reset()
-		tr.hbStorage.Reset()
-		tr.wasIHStorage = false
-		if tr.trace {
-			fmt.Printf("Reset hbStorage from WalkerStorage\n")
-		}
-		tr.groupsStorage = nil
-		tr.currStorage.Reset()
-		tr.succStorage.Reset()
-		tr.seenAccount = false
 	}
-
-	// skip storage keys:
-	// - if it has wrong incarnation
-	// - if it abandoned (account deleted)
-	if tr.seenAccount && tr.a.Incarnation == 0 { // skip all storage if incarnation is 0
-		if tr.trace {
-			fmt.Printf("WalkerStorage: skip %x, because 0 incarnation\n", k)
-		}
-		return nil
-	}
-
-	// skip ih or storage if it has another incarnation
-	if !bytes.HasPrefix(k, tr.accAddrHashWithInc) {
-		if tr.trace {
-			fmt.Printf("WalkerStorage: skip, not match accWithInc=%x\n", tr.accAddrHashWithInc)
-		}
-		return nil
-	}
-
-	if len(v) > 0 {
-		tr.currStorage.Reset()
-		tr.currStorage.Write(tr.succStorage.Bytes())
-		tr.succStorage.Reset()
-		skip := tr.currentReq.extResolvePos // how many first nibbles to skip
-
-		if skip < 80 {
-			skip = 80
-		}
-
-		i := 0
-		for _, b := range k {
-			if i >= skip {
-				tr.succStorage.WriteByte(b / 16)
-			}
-			i++
-			if i >= skip {
-				tr.succStorage.WriteByte(b % 16)
-			}
-			i++
-		}
-
-		if !isIH {
-			tr.succStorage.WriteByte(16)
-		}
-
-		if tr.currStorage.Len() > 0 {
-			var err error
-			var data GenStructStepData
-			if tr.trace {
-				fmt.Printf("tr.wasIHStorage=%t\n", tr.wasIHStorage)
-			}
-			if tr.wasIHStorage {
-				tr.hashData.Hash = common.BytesToHash(tr.valueStorage.Bytes())
-				data = &tr.hashData
-			} else {
-				tr.leafData.Value = rlphacks.RlpSerializableBytes(tr.valueStorage.Bytes())
-				data = &tr.leafData
-			}
-			tr.groupsStorage, err = GenStructStep(tr.rssChopped[tr.keyIdx].HashOnly, tr.currStorage.Bytes(), tr.succStorage.Bytes(), tr.hbStorage, data, tr.groupsStorage, false)
-			if err != nil {
-				return err
-			}
-		}
-		// Remember the current key and value
-		tr.wasIHStorage = isIH
-		tr.valueStorage.Reset()
-		tr.valueStorage.Write(v)
-	}
+	// Remember the current key and value
+	tr.wasIHStorage = isIH
+	tr.valueStorage.Reset()
+	tr.valueStorage.Write(v)
 
 	return nil
 }
@@ -522,145 +479,119 @@ func (tr *ResolverStateful) WalkerAccount(isIH bool, keyIdx int, k, v []byte) er
 	if tr.trace {
 		fmt.Printf("WalkerAccount: isIH=%v keyIdx=%d key=%x value=%x\n", isIH, keyIdx, k, v)
 	}
+	tr.curr.Reset()
+	tr.curr.Write(tr.succ.Bytes())
+	tr.succ.Reset()
+	skip := tr.currentReq.extResolvePos // how many first nibbles to skip
 
-	if keyIdx != tr.keyIdx {
-		if err := tr.finaliseRoot(); err != nil {
-			return err
+	i := 0
+	for _, b := range k {
+		if i >= skip {
+			tr.succ.WriteByte(b / 16)
 		}
-		tr.hb.Reset()
-		tr.wasIH = false
-		tr.groups = nil
-		tr.keyIdx = keyIdx
-		tr.currentReq = tr.requests[tr.reqIndices[keyIdx]]
-		tr.currentRs = tr.rss[keyIdx]
-		tr.currentRsChopped = tr.rssChopped[keyIdx]
-		tr.curr.Reset()
+		i++
+		if i >= skip {
+			tr.succ.WriteByte(b % 16)
+		}
+		i++
+	}
 
+	if !isIH {
+		tr.succ.WriteByte(16)
+	}
+
+	if tr.curr.Len() > 0 {
+		var err error
+		var data GenStructStepData
+		if tr.wasIH {
+			tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
+			data = &tr.hashData
+		} else {
+			var storageNode node
+			if tr.a.Incarnation == 0 {
+				tr.a.Root = EmptyRoot
+			} else {
+				if tr.trace {
+					fmt.Printf("Finalising storage root for %x\n", tr.accAddrHashWithInc)
+				}
+				err = tr.finaliseStorageRoot()
+				if err != nil {
+					return err
+				}
+
+				if tr.hbStorage.hasRoot() {
+					tr.a.Root.SetBytes(tr.hbStorage.rootHash().Bytes())
+					storageNode = tr.hbStorage.root()
+					if tr.trace {
+						fmt.Printf("Got root: %x\n", tr.a.Root)
+					}
+				} else {
+					tr.a.Root = EmptyRoot
+					if tr.trace {
+						fmt.Printf("Got empty root\n")
+					}
+				}
+			}
+			tr.accData.FieldSet = 0
+			if !tr.a.IsEmptyCodeHash() {
+				tr.accData.FieldSet |= AccountFieldCodeOnly
+			}
+			if storageNode != nil || !tr.a.IsEmptyRoot() {
+				tr.accData.FieldSet |= AccountFieldStorageOnly
+			}
+
+			tr.accData.Balance.Set(&tr.a.Balance)
+			if tr.a.Balance.Sign() != 0 {
+				tr.accData.FieldSet |= AccountFieldBalanceOnly
+			}
+			tr.accData.Nonce = tr.a.Nonce
+			if tr.a.Nonce != 0 {
+				tr.accData.FieldSet |= AccountFieldNonceOnly
+			}
+			tr.accData.Incarnation = tr.a.Incarnation
+			data = &tr.accData
+			if !tr.a.IsEmptyCodeHash() {
+				// the first item ends up deepest on the stack, the second item - on the top
+				err = tr.hb.hash(tr.a.CodeHash[:])
+				if err != nil {
+					return err
+				}
+			}
+			if storageNode != nil || !tr.a.IsEmptyRoot() {
+				tr.hb.hashStack = append(tr.hb.hashStack, 0x80+common.HashLength)
+				tr.hb.hashStack = append(tr.hb.hashStack, tr.a.Root[:]...)
+				tr.hb.nodeStack = append(tr.hb.nodeStack, storageNode)
+			}
+		}
 		tr.hbStorage.Reset()
 		tr.wasIHStorage = false
 		if tr.trace {
-			//fmt.Printf("Reset hbStorage from WalkerAccount\n")
+			//fmt.Printf("Reset hbStorage from WalkerAccount - past\n")
 		}
 		tr.groupsStorage = nil
 		tr.currStorage.Reset()
 		tr.succStorage.Reset()
+		tr.groups, err = GenStructStep(tr.currentRsChopped.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
+		if err != nil {
+			return err
+		}
+	}
+	// Remember the current key and value
+	tr.wasIH = isIH
+
+	if isIH {
+		tr.value.Reset()
+		tr.value.Write(v)
 		tr.seenAccount = false
+		return nil
 	}
-	if len(v) > 0 {
-		tr.curr.Reset()
-		tr.curr.Write(tr.succ.Bytes())
-		tr.succ.Reset()
-		skip := tr.currentReq.extResolvePos // how many first nibbles to skip
 
-		i := 0
-		for _, b := range k {
-			if i >= skip {
-				tr.succ.WriteByte(b / 16)
-			}
-			i++
-			if i >= skip {
-				tr.succ.WriteByte(b % 16)
-			}
-			i++
-		}
-
-		if !isIH {
-			tr.succ.WriteByte(16)
-		}
-
-		if tr.curr.Len() > 0 {
-			var err error
-			var data GenStructStepData
-			if tr.wasIH {
-				tr.hashData.Hash = common.BytesToHash(tr.value.Bytes())
-				data = &tr.hashData
-			} else {
-				var storageNode node
-				if tr.a.Incarnation == 0 {
-					tr.a.Root = EmptyRoot
-				} else {
-					if tr.trace {
-						fmt.Printf("Finalising storage root for %x\n", tr.accAddrHashWithInc)
-					}
-					err = tr.finaliseStorageRoot()
-					if err != nil {
-						return err
-					}
-
-					if tr.hbStorage.hasRoot() {
-						tr.a.Root.SetBytes(tr.hbStorage.rootHash().Bytes())
-						storageNode = tr.hbStorage.root()
-						if tr.trace {
-							fmt.Printf("Got root: %x\n", tr.a.Root)
-						}
-					} else {
-						tr.a.Root = EmptyRoot
-						if tr.trace {
-							fmt.Printf("Got empty root\n")
-						}
-					}
-				}
-				tr.accData.FieldSet = 0
-				if !tr.a.IsEmptyCodeHash() {
-					tr.accData.FieldSet |= AccountFieldCodeOnly
-				}
-				if storageNode != nil || !tr.a.IsEmptyRoot() {
-					tr.accData.FieldSet |= AccountFieldStorageOnly
-				}
-
-				tr.accData.Balance.Set(&tr.a.Balance)
-				if tr.a.Balance.Sign() != 0 {
-					tr.accData.FieldSet |= AccountFieldBalanceOnly
-				}
-				tr.accData.Nonce = tr.a.Nonce
-				if tr.a.Nonce != 0 {
-					tr.accData.FieldSet |= AccountFieldNonceOnly
-				}
-				tr.accData.Incarnation = tr.a.Incarnation
-				data = &tr.accData
-				if !tr.a.IsEmptyCodeHash() {
-					// the first item ends up deepest on the stack, the second item - on the top
-					err = tr.hb.hash(tr.a.CodeHash[:])
-					if err != nil {
-						return err
-					}
-				}
-				if storageNode != nil || !tr.a.IsEmptyRoot() {
-					tr.hb.hashStack = append(tr.hb.hashStack, 0x80+common.HashLength)
-					tr.hb.hashStack = append(tr.hb.hashStack, tr.a.Root[:]...)
-					tr.hb.nodeStack = append(tr.hb.nodeStack, storageNode)
-				}
-			}
-			tr.hbStorage.Reset()
-			tr.wasIHStorage = false
-			if tr.trace {
-				//fmt.Printf("Reset hbStorage from WalkerAccount - past\n")
-			}
-			tr.groupsStorage = nil
-			tr.currStorage.Reset()
-			tr.succStorage.Reset()
-			tr.groups, err = GenStructStep(tr.currentRsChopped.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups, false)
-			if err != nil {
-				return err
-			}
-		}
-		// Remember the current key and value
-		tr.wasIH = isIH
-
-		if isIH {
-			tr.value.Reset()
-			tr.value.Write(v)
-			tr.seenAccount = false
-			return nil
-		}
-
-		if err := tr.a.DecodeForStorage(v); err != nil {
-			return fmt.Errorf("fail DecodeForStorage: %w", err)
-		}
-		tr.seenAccount = true
-		copy(tr.accAddrHashWithInc, k)
-		binary.BigEndian.PutUint64(tr.accAddrHashWithInc[32:40], ^tr.a.Incarnation)
+	if err := tr.a.DecodeForStorage(v); err != nil {
+		return fmt.Errorf("fail DecodeForStorage: %w", err)
 	}
+	tr.seenAccount = true
+	copy(tr.accAddrHashWithInc, k)
+	binary.BigEndian.PutUint64(tr.accAddrHashWithInc[32:40], ^tr.a.Incarnation)
 
 	return nil
 }
@@ -752,12 +683,33 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 							// Looking for storage sub-tree
 							copy(tr.accAddrHashWithInc, startkey[:common.HashLength+common.IncarnationLength])
 						}
+						if err := tr.finaliseRoot(); err != nil {
+							return err
+						}
+						tr.hb.Reset()
+						tr.wasIH = false
+						tr.groups = nil
+						tr.keyIdx = rangeIdx
+						tr.currentReq = tr.requests[tr.reqIndices[rangeIdx]]
+						tr.currentRs = tr.rss[rangeIdx]
+						tr.currentRsChopped = tr.rssChopped[rangeIdx]
+						tr.curr.Reset()
+						tr.hbStorage.Reset()
+						tr.wasIHStorage = false
+						tr.groupsStorage = nil
+						tr.currStorage.Reset()
+						tr.succStorage.Reset()
+						tr.seenAccount = false
 					}
 				}
 			}
 
 			if !isIH {
-				if len(k) > 32 {
+				if len(k) > common.HashLength && !bytes.HasPrefix(k, tr.accAddrHashWithInc) {
+					// Skip all the irrelevant storage in the middle
+					k, v = c.SeekTo(tr.accAddrHashWithInc)
+				}
+				if len(k) > common.HashLength {
 					if err := storageWalker(false, rangeIdx, k, v); err != nil {
 						return err
 					}
@@ -809,7 +761,11 @@ func (tr *ResolverStateful) MultiWalk2(db *bolt.DB, startkeys [][]byte, fixedbit
 				continue
 			}
 
-			if len(ihK) > 32 {
+			if len(ihK) > common.HashLength && !bytes.HasPrefix(ihK, tr.accAddrHashWithInc) {
+				// Skip all the irrelevant storage in the middle
+				ihK, ihV = ih.SeekTo(tr.accAddrHashWithInc)
+			}
+			if len(ihK) > common.HashLength {
 				if err := storageWalker(true, rangeIdx, ihK, ihV); err != nil {
 					return fmt.Errorf("storageWalker err: %w", err)
 				}
