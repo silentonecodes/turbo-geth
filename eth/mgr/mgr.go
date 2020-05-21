@@ -123,7 +123,7 @@ func StateSizeSlice2StateSlice(db ethdb.Database, tr *trie.Trie, in StateSizeSli
 func _resolve(db ethdb.Database, tr *trie.Trie, decider trie.RetainDecider) error {
 	loader := trie.NewSubTrieLoader(0)
 	dbPrefixes, fixedbits, hooks := tr.FindSubTriesToLoad(decider)
-	subTries, err := loader.LoadSubTries(db, 0, decider, dbPrefixes, fixedbits, false)
+	subTries, err := loader.LoadSubTries(db, 0, decider, decider, dbPrefixes, fixedbits, false)
 	if err != nil {
 		return err
 	}

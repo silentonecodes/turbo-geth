@@ -185,3 +185,12 @@ func (rr *RetainRange) String() string {
 	return fmt.Sprintf("%x-%x", rr.from, rr.to)
 }
 
+type AlwaysRetainType struct {}
+func (ar AlwaysRetainType) Retain(_ []byte) bool { return true }
+func (ar AlwaysRetainType) IsCodeTouched(_ common.Hash) bool { return false }
+var AlwaysRetain AlwaysRetainType
+
+type NeverRetainType struct {}
+func (nr NeverRetainType) Retain(_ []byte) bool { return false }
+func (nr NeverRetainType) IsCodeTouched(_ common.Hash) bool { return false }
+var NeverRetain NeverRetainType

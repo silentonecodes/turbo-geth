@@ -642,7 +642,7 @@ func (tds *TrieDbState) ResolveStateTrie(extractWitnesses bool, trace bool) ([]*
 		if loader == nil {
 			return trie.SubTries{}, nil
 		}
-		subTries, err := loader.LoadSubTries(tds.db, tds.blockNr, rl, dbPrefixes, fixedbits, trace)
+		subTries, err := loader.LoadSubTries(tds.db, tds.blockNr, rl, rl, dbPrefixes, fixedbits, trace)
 		if err != nil {
 			return subTries, err
 		}

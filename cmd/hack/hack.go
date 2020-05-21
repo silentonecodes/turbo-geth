@@ -635,9 +635,7 @@ func mgrSchedule(chaindata string, block uint64) {
 
 	loader := trie.NewSubTrieLoader(0)
 	tr := trie.New(common.Hash{})
-	rs := trie.NewRetainList(0)
-	rs.AddHex([]byte{})
-	subTries, err := loader.LoadSubTries(db, 0, rs, [][]byte{nil}, []int{0}, false)
+	subTries, err := loader.LoadSubTries(db, 0, trie.NeverRetain, trie.NeverRetain, [][]byte{nil}, []int{0}, false)
 	check(err)
 
 	err = tr.HookSubTries(subTries, [][]byte{nil}) // hook up to the root
@@ -846,8 +844,7 @@ func testStartup() {
 	fmt.Printf("Current block number: %d\n", currentBlockNr)
 	fmt.Printf("Current block root hash: %x\n", currentBlock.Root())
 	l := trie.NewSubTrieLoader(currentBlockNr)
-	rl := trie.NewRetainList(0)
-	subTries, err1 := l.LoadSubTries(ethDb, currentBlockNr, rl, [][]byte{nil}, []int{0}, false)
+	subTries, err1 := l.LoadSubTries(ethDb, currentBlockNr, trie.NeverRetain, trie.NeverRetain, [][]byte{nil}, []int{0}, false)
 	if err1 != nil {
 		fmt.Printf("%v\n", err1)
 	}
@@ -896,7 +893,7 @@ func testResolve(chaindata string) {
 	key = common.FromHex("0a080d05070c0604040302030508050100020105040e05080c0a0f030d0d050f08070a050b0c08090b02040e0e0200030f0c0b0f0704060a0d0703050009010f")
 	rl := trie.NewRetainList(0)
 	rl.AddHex(key[:3])
-	subTries, err1 := l.LoadSubTries(ethDb, currentBlockNr, rl, [][]byte{{0xa8, 0xd0}}, []int{12}, true)
+	subTries, err1 := l.LoadSubTries(ethDb, currentBlockNr, rl, rl, [][]byte{{0xa8, 0xd0}}, []int{12}, true)
 	if err1 != nil {
 		fmt.Printf("Resolve error: %v\n", err1)
 	}
@@ -2091,13 +2088,27 @@ func (r *Receiver) Result() trie.SubTries {
 
 func testGetProof(chaindata string, block uint64, address common.Address) error {
 	storageKeys := []string{}
-	fmt.Printf("testGetProof %s, %d, %x\n", chaindata, block, address)
-	db, dberr := ethdb.NewBoltDatabase(chaindata)
-	check(dberr)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	log.Info("GetProof", "address", address, "storage keys", len(storageKeys), "block", block,
 		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
+	db, dberr := ethdb.NewBoltDatabase(chaindata)
+	check(dberr)
+	loader := trie.NewFlatDbSubTrieLoader()
+	if err := loader.Reset(db, trie.NeverRetain, trie.AlwaysRetain, [][]byte{nil}, []int{0}, false); err != nil {
+		return err
+	}
+	if subTries, err := loader.LoadSubTries(); err == nil {
+		tr := trie.New(subTries.Hashes[0])
+		if err1 := tr.HookSubTries(subTries, [][]byte{nil}); err1 != nil {
+			return err1
+		}
+		runtime.ReadMemStats(&m)
+		log.Info("Loaded initial trie", "size", tr.NumberOfAccounts(),
+			"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
+	} else {
+		return err
+	}
 	ts := dbutils.EncodeTimestamp(block)
 	accountMap := make(map[string]*accounts.Account)
 	if err := db.Walk(dbutils.AccountChangeSetBucket, ts, 0, func(k, v []byte) (bool, error) {
@@ -2196,8 +2207,8 @@ func testGetProof(chaindata string, block uint64, address common.Address) error 
 	runtime.ReadMemStats(&m)
 	log.Info("Constructed account unfurl lists",
 		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
-	loader := trie.NewFlatDbSubTrieLoader()
-	if err = loader.Reset(db, unfurl, [][]byte{nil}, []int{0}, false); err != nil {
+	loader = trie.NewFlatDbSubTrieLoader()
+	if err = loader.Reset(db, unfurl, trie.NeverRetain, [][]byte{nil}, []int{0}, false); err != nil {
 		return err
 	}
 	r := &Receiver{defaultReceiver: trie.NewDefaultReceiver(), unfurlList: unfurlList, accountMap: accountMap, storageMap: storageMap}

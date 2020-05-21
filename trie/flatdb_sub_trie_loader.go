@@ -105,14 +105,14 @@ func NewFlatDbSubTrieLoader() *FlatDbSubTrieLoader {
 }
 
 // Reset prepares the loader for reuse
-func (fstl *FlatDbSubTrieLoader) Reset(db ethdb.Database, rl RetainDecider, dbPrefixes [][]byte, fixedbits []int, trace bool) error {
-	fstl.defaultReceiver.Reset(rl, trace)
+func (fstl *FlatDbSubTrieLoader) Reset(db ethdb.Database, rl1, rl2 RetainDecider, dbPrefixes [][]byte, fixedbits []int, trace bool) error {
+	fstl.defaultReceiver.Reset(rl2, trace)
 	fstl.receiver = fstl.defaultReceiver
 	fstl.rangeIdx = 0
 
 	fstl.minKeyAsNibbles.Reset()
 	fstl.trace = trace
-	fstl.rl = rl
+	fstl.rl = rl1
 	fstl.dbPrefixes = dbPrefixes
 	fstl.itemPresent = false
 	if fstl.trace {
