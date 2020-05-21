@@ -2092,8 +2092,8 @@ func (r *Receiver) Result() trie.SubTries {
 func testGetProof(chaindata string, block uint64, address common.Address) ([]byte, error) {
 	storageKeys := []string{}
 	fmt.Printf("testGetProof %s, %d, %x\n", chaindata, block, address)
-	db, err := ethdb.NewBoltDatabase(chaindata)
-	check(err)
+	db, dberr := ethdb.NewBoltDatabase(chaindata)
+	check(dberr)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	log.Info("GetProof", "address", address, "storage keys", len(storageKeys), "block", block,
