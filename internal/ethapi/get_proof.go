@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"math/big"
-	"sort"
 	"runtime"
+	"sort"
 
 	"github.com/ledgerwatch/turbo-geth/common"
 	"github.com/ledgerwatch/turbo-geth/common/changeset"
