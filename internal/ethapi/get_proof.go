@@ -5,6 +5,7 @@ import (
 	"context"
 	"math/big"
 	"sort"
+	"runtime"
 
 	"github.com/ledgerwatch/turbo-geth/common"
 	"github.com/ledgerwatch/turbo-geth/common/changeset"
@@ -12,6 +13,7 @@ import (
 	"github.com/ledgerwatch/turbo-geth/common/hexutil"
 	"github.com/ledgerwatch/turbo-geth/core/rawdb"
 	"github.com/ledgerwatch/turbo-geth/core/types/accounts"
+	"github.com/ledgerwatch/turbo-geth/log"
 	"github.com/ledgerwatch/turbo-geth/rpc"
 	"github.com/ledgerwatch/turbo-geth/trie"
 )
@@ -33,10 +35,13 @@ type StorageResult struct {
 }
 
 func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNr rpc.BlockNumber) (*AccountResult, error) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	log.Info("GetProof", "address", address, "storage keys", len(storageKeys), "block", blockNr,
+		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
 	block := uint64(blockNr.Int64()) + 1
 	db := s.b.ChainDb()
 	ts := dbutils.EncodeTimestamp(block)
-	accountCs := 0
 	accountMap := make(map[string]*accounts.Account)
 	if err := db.Walk(dbutils.AccountChangeSetBucket, ts, 0, func(k, v []byte) (bool, error) {
 		if changeset.Len(v) > 0 {
@@ -59,12 +64,13 @@ func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Addre
 				return false, innerErr
 			}
 		}
-		accountCs++
 		return true, nil
 	}); err != nil {
 		return nil, err
 	}
-	storageCs := 0
+	runtime.ReadMemStats(&m)
+	log.Info("Constructed account map", "size", len(accountMap),
+		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
 	storageMap := make(map[string][]byte)
 	if err := db.Walk(dbutils.StorageChangeSetBucket, ts, 0, func(k, v []byte) (bool, error) {
 		if changeset.Len(v) > 0 {
@@ -79,11 +85,13 @@ func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Addre
 				return false, innerErr
 			}
 		}
-		storageCs++
 		return true, nil
 	}); err != nil {
 		return nil, err
 	}
+	runtime.ReadMemStats(&m)
+	log.Info("Constructed storage map", "size", len(storageMap),
+		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
 	var unfurlList = make([]string, len(accountMap)+len(storageMap))
 	unfurl := trie.NewRetainList(0)
 	i := 0
@@ -128,6 +136,9 @@ func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Addre
 		}
 	}
 	sort.Strings(unfurlList)
+	runtime.ReadMemStats(&m)
+	log.Info("Constructed account unfurl lists",
+		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
 	loader := trie.NewFlatDbSubTrieLoader()
 	if err = loader.Reset(db, unfurl, [][]byte{nil}, []int{0}, false); err != nil {
 		return nil, err
@@ -139,6 +150,9 @@ func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Addre
 	if err1 != nil {
 		return nil, err1
 	}
+	runtime.ReadMemStats(&m)
+	log.Info("Loaded subtries",
+		"alloc", int(m.Alloc/1024), "sys", int(m.Sys/1024), "numGC", int(m.NumGC))
 	hash := rawdb.ReadCanonicalHash(db, block-1)
 	header := rawdb.ReadHeader(db, hash, block-1)
 	tr := trie.New(header.Root)
