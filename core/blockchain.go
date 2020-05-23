@@ -1527,7 +1527,10 @@ func (bc *BlockChain) insertChain(ctx context.Context, chain types.Blocks, verif
 		return 0, nil
 	}
 	// Start a parallel signature recovery (signer will fluke on fork transition, minimal perf loss)
-	senderCacher.recoverFromBlocks(types.MakeSigner(bc.chainConfig, chain[0].Number()), chain)
+	if execute {
+		InitTxCacher()
+		senderCacher.recoverFromBlocks(types.MakeSigner(bc.chainConfig, chain[0].Number()), chain)
+	}
 
 	// A queued approach to delivering events. This is generally
 	// faster than direct delivery and requires much less mutex
@@ -1924,7 +1927,7 @@ func (st *insertStats) report(chain []*types.Block, index int, batch ethdb.DbWit
 		context := []interface{}{
 			"blocks", st.processed, "txs", txs, "mgas", float64(st.usedGas) / 1000000,
 			"elapsed", common.PrettyDuration(elapsed), "mgasps", float64(st.usedGas) * 1000 / float64(elapsed),
-			"number", end.Number(), "hash", end.Hash(), "batch", batch.BatchSize(),
+			"number", end.Number(), "hash", end.Hash(), "batch", common.StorageSize(batch.BatchSize()),
 		}
 		if timestamp := time.Unix(int64(end.Time()), 0); time.Since(timestamp) > time.Minute {
 			context = append(context, []interface{}{"age", common.PrettyAge(timestamp)}...)

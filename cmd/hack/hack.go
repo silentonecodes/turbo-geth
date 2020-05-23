@@ -1228,6 +1228,22 @@ func printBranches(block uint64) {
 	}
 }
 
+func readPlainAccount(chaindata string, address common.Address) {
+	ethDb, err := ethdb.NewBoltDatabase(chaindata)
+	check(err)
+	var acc accounts.Account
+	enc, err := ethDb.Get(dbutils.PlainStateBucket, address[:])
+	if err != nil {
+		panic(err)
+	} else if enc == nil {
+		panic("acc not found")
+	}
+	if err = acc.DecodeForStorage(enc); err != nil {
+		panic(err)
+	}
+	fmt.Printf("%x\n%x\n%x\n%d\n", address, acc.Root, acc.CodeHash, acc.Incarnation)
+}
+
 func readAccount(chaindata string, account common.Address, block uint64, rewind uint64) {
 	ethDb, err := ethdb.NewBoltDatabase(chaindata)
 	check(err)
@@ -2017,6 +2033,22 @@ func resetState(chaindata string) {
 	check(err)
 	fmt.Printf("Reset state done\n")
 }
+
+func resetHistoryIndex(chaindata string) {
+	db, err := ethdb.NewBoltDatabase(chaindata)
+	check(err)
+	defer db.Close()
+	//nolint:errcheck
+	db.DeleteBucket(dbutils.AccountsHistoryBucket)
+	//nolint:errcheck
+	db.DeleteBucket(dbutils.StorageHistoryBucket)
+	err = downloader.SaveStageProgress(db, downloader.AccountHistoryIndex, 0)
+	check(err)
+	err = downloader.SaveStageProgress(db, downloader.StorageHistoryIndex, 0)
+	check(err)
+	fmt.Printf("Reset history index done\n")
+}
+
 type Receiver struct {
 	defaultReceiver *trie.DefaultReceiver
 	accountMap      map[string]*accounts.Account
@@ -2339,6 +2371,9 @@ func main() {
 	if *action == "readAccount" {
 		readAccount(*chaindata, common.HexToAddress(*account), uint64(*block), uint64(*rewind))
 	}
+	if *action == "readPlainAccount" {
+		readPlainAccount(*chaindata, common.HexToAddress(*account))
+	}
 	if *action == "fixAccount" {
 		fixAccount(*chaindata, common.HexToHash(*account), common.HexToHash(*hash))
 	}
@@ -2388,6 +2423,9 @@ func main() {
 	}
 	if *action == "resetState" {
 		resetState(*chaindata)
+	}
+	if *action == "resetHistoryIndex" {
+		resetHistoryIndex(*chaindata)
 	}
 	if *action == "getProof" {
 		fmt.Printf("%v\n", testGetProof(*chaindata, uint64(*block), common.HexToAddress(*account)))
