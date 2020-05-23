@@ -2127,7 +2127,7 @@ func testGetProof(chaindata string, block uint64, address common.Address) error 
 	db, dberr := ethdb.NewBoltDatabase(chaindata)
 	check(dberr)
 	loader := trie.NewFlatDbSubTrieLoader()
-	if err := loader.Reset(db, trie.NeverRetain, trie.AlwaysRetain, [][]byte{nil}, []int{0}, false); err != nil {
+	if err := loader.Reset(db, trie.NeverRetain, trie.NewRetainList(5), [][]byte{nil}, []int{0}, false); err != nil {
 		return err
 	}
 	if subTries, err := loader.LoadSubTries(); err == nil {
