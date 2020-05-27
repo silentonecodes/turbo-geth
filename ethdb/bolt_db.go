@@ -29,6 +29,7 @@ import (
 	"github.com/ledgerwatch/turbo-geth/common"
 	"github.com/ledgerwatch/turbo-geth/common/changeset"
 	"github.com/ledgerwatch/turbo-geth/common/dbutils"
+	"github.com/ledgerwatch/turbo-geth/common/debug"
 	"github.com/ledgerwatch/turbo-geth/core/types/accounts"
 	"github.com/ledgerwatch/turbo-geth/log"
 )
@@ -82,6 +83,9 @@ func NewBoltDatabase(file string) (*BoltDatabase, error) {
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if debug.IsTrackWitnessSizeEnabled() {
+		db.NoSync = true
 	}
 
 	return &BoltDatabase{
